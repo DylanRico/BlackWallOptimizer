@@ -1,0 +1,33 @@
+[package]
+name = "winapex"
+version = "1.0.0"
+description = "WinApex - Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido para Windows 10/11"
+authors = ["WinApex Architecture"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.39", features = ["process", "io-util", "rt-multi-thread", "macros", "sync", "time"] }
+sha2 = "0.10"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Storage_FileSystem",
+  "Win32_System_SystemInformation",
+  "Win32_System_Power",
+  "Win32_System_Threading",
+  "Win32_Foundation"
+] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

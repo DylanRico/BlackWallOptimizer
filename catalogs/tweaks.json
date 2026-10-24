@@ -1,0 +1,347 @@
+{
+  "schemaVersion": "2.0.0",
+  "lastUpdated": "2026-10-23T16:25:00Z",
+  "tweaks": [
+    {
+      "id": "laptop_modern_standby_network",
+      "category": "optimization",
+      "subcategory": "Energía y Batería (Laptop)",
+      "title": "Desactivar Red en Modern Standby (S0 Low Power Idle) en Batería",
+      "description": "Impide que Windows mantenga la conexión Wi-Fi activa mientras la laptop tiene la tapa cerrada en batería, evitando drenaje nocturno y sobrecalentamiento en mochilas.",
+      "benefits": [
+        "Reduce hasta un 85% la pérdida de batería en modo suspensión",
+        "Previene que la laptop se caliente guardada en la mochila"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["laptop", "batería", "modern standby", "suspensión", "calor", "energía", "s0"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9", "name": "DCSettingIndex", "value": 0 },
+        { "type": "powercfg", "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 0" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ],
+      "undoOps": [
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9", "name": "DCSettingIndex" },
+        { "type": "powercfg", "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 1" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ]
+    },
+    {
+      "id": "laptop_cpu_boost_efficiency",
+      "category": "optimization",
+      "subcategory": "Energía y Batería (Laptop)",
+      "title": "Turbo Boost Adaptativo Inteligente en Batería (Gestión Térmica)",
+      "description": "Configura el modo de impulso de rendimiento del procesador en 'Eficiente Habilitado' cuando está en batería (DC) y 'Agresivo' al conectarse a corriente (AC).",
+      "benefits": [
+        "Baja la temperatura del procesador entre 8°C y 15°C usando batería",
+        "Extiende la autonomía entre 45 y 90 minutos sin perder fluidez"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["laptop", "cpu", "temperatura", "turbo boost", "batería", "ventilador"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerSettings\\54533251-82be-4824-96c1-47b60b740d00\\be337238-0d82-4146-a960-4f3749d470c7", "name": "Attributes", "value": 2 },
+        { "type": "powercfg", "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 3" },
+        { "type": "powercfg", "args": "/setacvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ],
+      "undoOps": [
+        { "type": "powercfg", "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ]
+    },
+    {
+      "id": "laptop_hibernation_fast_boot",
+      "category": "optimization",
+      "subcategory": "Energía y Batería (Laptop)",
+      "title": "Hibernación Compacta (Hiberfil Reducido al 40%)",
+      "description": "Mantiene activa la hibernación para proteger tus documentos si se agota la batería, pero comprime el archivo hiberfil.sys al 40% de la RAM.",
+      "benefits": [
+        "Recupera entre 6 GB y 16 GB de espacio en el SSD NVMe",
+        "Conserva la hibernación segura ante batería crítica"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["hibernación", "ssd", "espacio", "laptop", "hiberfil"],
+      "applyOps": [
+        { "type": "powercfg", "args": "/hibernate on" },
+        { "type": "powercfg", "args": "/hibernate /size 40" }
+      ],
+      "undoOps": [
+        { "type": "powercfg", "args": "/hibernate /size 100" }
+      ]
+    },
+    {
+      "id": "desktop_ultimate_performance_plan",
+      "category": "optimization",
+      "subcategory": "Máxima Potencia (Desktop)",
+      "title": "Activar Plan de Energía de Alto Rendimiento Sin Latencia",
+      "description": "Activa el esquema de energía de Alto Rendimiento que evita el aparcamiento agresivo de núcleos y mantiene frecuencias estables.",
+      "benefits": [
+        "Elimina la latencia de escalado de frecuencias del procesador",
+        "Máxima estabilidad de fotogramas (frametimes) y respuesta inmediata"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["desktop", "ultimate performance", "energía", "cpu", "latencia", "fps"],
+      "applyOps": [
+        { "type": "powercfg", "args": "/duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61" },
+        { "type": "powercfg", "args": "/setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" }
+      ],
+      "undoOps": [
+        { "type": "powercfg", "args": "/setactive 381b4222-f694-41f0-9685-ff5bb260df2e" }
+      ]
+    },
+    {
+      "id": "desktop_disable_pcie_usb_suspend",
+      "category": "optimization",
+      "subcategory": "Máxima Potencia (Desktop)",
+      "title": "Desactivar Suspensión Selectiva USB y Ahorro PCIe Link State (ASPM)",
+      "description": "Evita que Windows corte energía a los puertos USB (ratón/teclado/audio DAC) y al bus PCI-Express de la tarjeta gráfica o NVMe.",
+      "benefits": [
+        "Elimina micro-cortes en ratones gaming de 1000Hz-8000Hz e interfaces de audio",
+        "Mantiene la GPU y el SSD NVMe en su estado de latencia más baja (L0)"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["desktop", "usb", "pcie", "latencia", "ratón", "gpu", "nvme"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\USB", "name": "DisableSelectiveSuspend", "value": 1 },
+        { "type": "powercfg", "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0" },
+        { "type": "powercfg", "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ],
+      "undoOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\USB", "name": "DisableSelectiveSuspend", "value": 0 },
+        { "type": "powercfg", "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1" },
+        { "type": "powercfg", "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 1" },
+        { "type": "powercfg", "args": "/setactive scheme_current" }
+      ]
+    },
+    {
+      "id": "desktop_disable_hibernation_full",
+      "category": "optimization",
+      "subcategory": "Máxima Potencia (Desktop)",
+      "title": "Desactivar Hibernación e Inicio Rápido en PC de Escritorio",
+      "description": "En equipos de sobremesa conectados a corriente, desactiva hiberfil.sys y el Inicio Rápido híbrido que suele acumular errores de drivers y uptime infinito.",
+      "benefits": [
+        "Libera el 100% del archivo hiberfil.sys (hasta 32 GB en disco C:)",
+        "Garantiza reinicios limpios del kernel y drivers de GPU"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["desktop", "hibernación", "fast startup", "inicio rápido", "ssd"],
+      "applyOps": [
+        { "type": "powercfg", "args": "/hibernate off" }
+      ],
+      "undoOps": [
+        { "type": "powercfg", "args": "/hibernate on" }
+      ]
+    },
+    {
+      "id": "common_ui_responsiveness_menushowdelay",
+      "category": "optimization",
+      "subcategory": "Rendimiento del Sistema y UI",
+      "title": "Acelerar Respuesta de Interfaz, Menús Contextuales y Prioridad de Primer Plano",
+      "description": "Reduce MenuShowDelay de 400ms a 10ms y optimiza Win32PrioritySeparation para dar máxima prioridad de CPU a la ventana activa.",
+      "benefits": [
+        "Sensación instantánea al abrir menús y ventanas",
+        "Mejor respuesta de aplicaciones en primer plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["ui", "velocidad", "menú", "latencia", "win32priority"],
+      "applyOps": [
+        { "type": "reg_sz", "hive": "HKCU", "key": "Control Panel\\Desktop", "name": "MenuShowDelay", "value": "10" },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl", "name": "Win32PrioritySeparation", "value": 38 }
+      ],
+      "undoOps": [
+        { "type": "reg_sz", "hive": "HKCU", "key": "Control Panel\\Desktop", "name": "MenuShowDelay", "value": "400" },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl", "name": "Win32PrioritySeparation", "value": 2 }
+      ]
+    },
+    {
+      "id": "common_network_throttling_nagle",
+      "category": "optimization",
+      "subcategory": "Red y Baja Latencia",
+      "title": "Eliminar Estrangulamiento de Red Multimedia (NetworkThrottlingIndex)",
+      "description": "Desactiva el límite artificial de paquetes de red que Windows impone cuando se reproducen medios o juegos (SystemResponsiveness = 0).",
+      "benefits": [
+        "Menor jitter y ping más estable en juegos online y videollamadas",
+        "Máximo rendimiento de transferencia en redes Gigabit y Wi-Fi 6/7"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["red", "ping", "latencia", "network", "gaming", "wifi", "ethernet"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "NetworkThrottlingIndex", "value": -1 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "SystemResponsiveness", "value": 0 }
+      ],
+      "undoOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "NetworkThrottlingIndex", "value": 10 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "SystemResponsiveness", "value": 20 }
+      ]
+    },
+    {
+      "id": "debloat_telemetry_diagtrack",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría",
+      "title": "Desactivar Telemetría de Windows, Experiencias Conectadas y DiagTrack",
+      "description": "Configura AllowTelemetry al nivel mínimo permitido y desactiva el servicio DiagTrack de recolección de diagnóstico en segundo plano.",
+      "benefits": [
+        "Elimina escrituras constantes en segundo plano hacia servidores de telemetría",
+        "Reduce el uso de CPU/Disco en reposo"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["telemetría", "privacidad", "diagtrack", "datos", "microsoft"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "name": "AllowTelemetry", "value": 0 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack", "name": "Start", "value": 4 },
+        { "type": "service_stop", "name": "DiagTrack" }
+      ],
+      "undoOps": [
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "name": "AllowTelemetry" },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack", "name": "Start", "value": 2 }
+      ]
+    },
+    {
+      "id": "debloat_copilot_recall_ai",
+      "category": "debloat",
+      "subcategory": "IA, Copilot y Recall",
+      "title": "Desactivar Windows Copilot y Windows Recall (Capturas de Pantalla IA)",
+      "description": "Deshabilita el botón e integración de Copilot y bloquea por directiva de grupo el análisis de instantáneas Windows Recall en Windows 11.",
+      "benefits": [
+        "Protección total contra capturas automáticas de pantalla de Windows Recall",
+        "Ahorra entre 300 MB y 800 MB de RAM en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["copilot", "recall", "ia", "ai", "privacidad", "win11", "24h2"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot", "value": 1 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot", "value": 1 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI", "name": "DisableAIDataAnalysis", "value": 1 }
+      ],
+      "undoOps": [
+        { "type": "reg_delete", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot" },
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot" },
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI", "name": "DisableAIDataAnalysis" }
+      ]
+    },
+    {
+      "id": "debloat_bing_start_widgets",
+      "category": "debloat",
+      "subcategory": "Interfaz y Bloatware Visual",
+      "title": "Desactivar Búsqueda Web de Bing en Menú Inicio, Anuncios y Widgets",
+      "description": "Hace que el buscador del menú Inicio busque exclusivamente archivos y programas locales al instante, sin consultar Bing ni cargar noticias MSN.",
+      "benefits": [
+        "El buscador de Windows responde de forma instantánea incluso con internet lento",
+        "Elimina procesos Widgets.exe y sugerencias publicitarias en el Explorador"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["bing", "inicio", "search", "widgets", "noticias", "anuncios", "publicidad"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\Explorer", "name": "DisableSearchBoxSuggestions", "value": 1 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Dsh", "name": "AllowNewsAndInterests", "value": 0 },
+        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "name": "SubscribedContent-338389Enabled", "value": 0 }
+      ],
+      "undoOps": [
+        { "type": "reg_delete", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\Explorer", "name": "DisableSearchBoxSuggestions" },
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Dsh", "name": "AllowNewsAndInterests" },
+        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "name": "SubscribedContent-338389Enabled", "value": 1 }
+      ]
+    },
+    {
+      "id": "debloat_win11_classic_context_menu",
+      "category": "debloat",
+      "subcategory": "Interfaz y Bloatware Visual",
+      "title": "Restaurar Menú Contextual Completo Clásico en Windows 11",
+      "description": "Elimina la necesidad de pulsar 'Mostrar más opciones' al hacer clic derecho en Windows 11, mostrando todas las opciones de 7-Zip, WinRAR y VS Code al instante.",
+      "benefits": [
+        "Ahorra un clic en cada operación de archivo",
+        "Renderizado más rápido que el menú XAML moderno de Windows 11"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win11"],
+      "tags": ["win11", "menú contextual", "clic derecho", "explorador"],
+      "applyOps": [
+        { "type": "reg_sz", "hive": "HKCU", "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32", "name": "", "value": "" }
+      ],
+      "undoOps": [
+        { "type": "reg_delete_tree", "hive": "HKCU", "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" }
+      ]
+    },
+    {
+      "id": "debloat_xbox_gamedvr_capture",
+      "category": "debloat",
+      "subcategory": "Gaming y Servicios",
+      "title": "Desactivar Grabación en Segundo Plano GameDVR y Superposición Xbox",
+      "description": "Desactiva la grabación continua de vídeo de Xbox GameDVR que codifica vídeo en segundo plano mientras juegas.",
+      "benefits": [
+        "Mejora los FPS mínimos (1% Lows) y reduce la latencia de entrada (Input Lag)",
+        "Evita uso innecesario del codificador de vídeo de la tarjeta gráfica"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Desactiva los clips de vídeo con Win+Alt+G en Xbox Game Bar. Los juegos de Xbox Game Pass seguirán funcionando con normalidad.",
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["xbox", "gamedvr", "game bar", "fps", "input lag", "gaming"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKCU", "key": "System\\GameConfigStore", "name": "GameDVR_Enabled", "value": 0 },
+        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR", "name": "AllowGameDVR", "value": 0 }
+      ],
+      "undoOps": [
+        { "type": "reg_dword", "hive": "HKCU", "key": "System\\GameConfigStore", "name": "GameDVR_Enabled", "value": 1 },
+        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR", "name": "AllowGameDVR" }
+      ]
+    },
+    {
+      "id": "advanced_disable_vbs_hvci",
+      "category": "optimization",
+      "subcategory": "Avanzado / Kernel",
+      "title": "Desactivar Aislamiento de Núcleo (HVCI / Integridad de Memoria) para Máximo Rendimiento",
+      "description": "Desactiva la Seguridad Basada en Virtualización (VBS) sobre hipervisor que añade sobrecarga en cada llamada a memoria del kernel.",
+      "benefits": [
+        "Incrementa el rendimiento en juegos y cargas intensivas de CPU entre un 5% y un 12%",
+        "Permite el uso de herramientas de undervolting y lectura de registros MSR"
+      ],
+      "riskLevel": "high",
+      "riskWarning": "Reduce una capa de seguridad de virtualización del kernel (Integridad de memoria). Recomendado solo para usuarios experimentados. Requiere reiniciar.",
+      "deviceScope": ["laptop", "desktop"],
+      "osCompatibility": ["win10", "win11"],
+      "tags": ["vbs", "hvci", "integridad de memoria", "kernel", "fps", "avanzado"],
+      "applyOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity", "name": "Enabled", "value": 0 }
+      ],
+      "undoOps": [
+        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity", "name": "Enabled", "value": 1 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "winapex",
+  "version": "1.0.0",
+  "description": "WinApex — Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido (Rust + Tauri v2)",
+  "type": "module",
+  "scripts": {
+    "start": "node dev-bridge.mjs",
+    "tauri:dev": "cargo tauri dev",
+    "tauri:build": "cd src-tauri && cargo build --release"
+  }
+}

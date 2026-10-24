@@ -1,0 +1,18 @@
+# Archivos temporales de compilación y respaldos
+*.tmp
+*.log
+*.old
+*.new
+*.bak
+
+# Si se usa dev-bridge o webview
+node_modules/
+dist/
+.cache/
+
+# Entornos y certificados temporales
+*.pfx
+check-icons.ps1
+check-dimensions.ps1
+dl-directx.ps1
+check-ico-frames.ps1

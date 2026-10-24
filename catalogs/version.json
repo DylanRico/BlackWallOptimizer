@@ -1,0 +1,22 @@
+﻿{
+    "appVersion":  "1.2.0",
+    "releaseDate":  "2026-10-23T16:45:00Z",
+    "manifestUrl":  "https://raw.githubusercontent.com/dylan/WinApex/main/catalogs/version.json",
+    "mandatory":  false,
+    "binary":  {
+                   "downloadUrl":  "https://github.com/dylan/WinApex/releases/latest/download/WinApex.exe",
+                   "sha256":  "d5cf22e81f5c70abc9a2ebe9f62be1cebcef64588f2199715cd55328454c26d9"
+               },
+    "catalogs":  {
+                     "tweaksVersion":  "2.0.0",
+                     "tweaksUrl":  "https://raw.githubusercontent.com/dylan/WinApex/main/catalogs/tweaks.json",
+                     "appsVersion":  "2.0.0",
+                     "appsUrl":  "https://raw.githubusercontent.com/dylan/WinApex/main/catalogs/apps.json"
+                 },
+    "changelog":  [
+                      "Motor 100% Nativo C# WMI/Registry sin llamadas a PowerShell (Cero falsos positivos en Antivirus).",
+                      "Auto-actualizador OTA real en binario portable (Reemplazo en caliente File.Move .old + Verificación SHA-256).",
+                      "Instalador desatendido dual (Resolutor inteligente WinGet + Descargador HTTPS directo con progreso en MB).",
+                      "Escaneo completo de hardware, slots físicos de RAM y desgaste de batería en menos de 350 milisegundos."
+                  ]
+}

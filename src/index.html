@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinApex — Auditoría Profunda, Optimización, Debloat &amp; Instalador (Win 10/11)</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- BARRA SUPERIOR CON BUSCADOR CENTRAL (OMNIBOX CTRL+K) Y TEMA -->
+  <header class="top-header">
+    <div class="brand-box">
+      <div class="brand-logo">W</div>
+      <div>
+        <div class="brand-title">WinApex <span style="font-size:11px; color:var(--accent); font-weight:700;">v1.0 PORTABLE</span></div>
+        <div class="brand-subtitle">
+          <span id="device-badge-pill">🔍 Detectando chasis...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- BUSCADOR GLOBAL CENTRADO (OMNIBOX) -->
+    <div class="omnibox-wrapper">
+      <span class="omnibox-icon">🔍</span>
+      <input
+        id="omnibox-input"
+        type="text"
+        class="omnibox-input"
+        placeholder="Buscar cualquier tweak, app, serial, RAM, batería, DNS... (Ctrl + K)"
+        autocomplete="off"
+      />
+      <span class="omnibox-kbd">Ctrl + K</span>
+      <div id="omnibox-results" class="omnibox-dropdown hidden"></div>
+    </div>
+
+    <!-- ACCIONES SUPERIORES -->
+    <div class="header-actions">
+      <button id="btn-create-rp-top" class="btn btn-sm" title="Crear Punto de Restauración del Sistema ahora">
+        🛡️ Crear Punto Restauración
+      </button>
+      <button id="btn-ota-check" class="btn btn-sm" style="border-color: var(--accent); color: var(--accent);">
+        🔄 OTA v1.1.0
+      </button>
+      <button id="btn-theme-toggle" class="btn btn-sm" title="Alternar Modo Oscuro / Modo Claro">
+        ☀️ Modo Claro
+      </button>
+    </div>
+  </header>
+
+  <!-- CUERPO PRINCIPAL -->
+  <div class="app-body">
+    <!-- BARRA LATERAL POR CATEGORÍAS Y SUBCATEGORÍAS -->
+    <aside class="sidebar">
+      <div>
+        <div class="nav-group-label">Diagnóstico Físico y Lógico</div>
+        <button class="nav-btn active" data-tab="hardware">
+          <span>📊 Auditoría de Hardware</span>
+          <span class="nav-badge">WMI/SMART</span>
+        </button>
+
+        <div class="nav-group-label">Rendimiento y Privacidad</div>
+        <button class="nav-btn" data-tab="optimization">
+          <span>🚀 Optimización Adaptativa</span>
+          <span id="badge-opt-count" class="nav-badge">8</span>
+        </button>
+        <button class="nav-btn" data-tab="debloat">
+          <span>🧹 Debloat &amp; Privacidad</span>
+          <span id="badge-debloat-count" class="nav-badge">6</span>
+        </button>
+
+        <div class="nav-group-label">Automatización y Procesos</div>
+        <button class="nav-btn" data-tab="apps">
+          <span>📦 Instalador Desatendido</span>
+          <span id="badge-apps-count" class="nav-badge">16</span>
+        </button>
+        <button class="nav-btn" data-tab="monitor">
+          <span>📡 Scripts en Ejecución</span>
+          <span id="badge-scripts-count" class="nav-badge">En Vivo</span>
+        </button>
+
+        <div class="nav-group-label">Protección del Sistema</div>
+        <button class="nav-btn" data-tab="safety">
+          <span>🛡️ Seguridad y Restauración</span>
+          <span class="nav-badge">Activo</span>
+        </button>
+      </div>
+
+      <div class="card" style="padding:12px; gap:6px; font-size:11.5px;">
+        <div style="font-weight:700; color:var(--accent);">⚡ Motor Rust + WMI Nativo</div>
+        <div style="color:var(--text-secondary);">Ejecución 100% asíncrona sin congelar la interfaz.</div>
+      </div>
+    </aside>
+
+    <!-- ÁREA CENTRAL DINÁMICA -->
+    <main id="main-view" class="main-content">
+      <!-- Renderizado dinámico por módulo -->
+    </main>
+  </div>
+
+  <!-- BARRA INFERIOR DE ESTADO Y PROGRESO -->
+  <footer class="status-footer">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span id="status-indicator">🟢 Listo — Protección Pre-Tweak Habilitada</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <span id="active-task-label" style="color:var(--text-secondary);">Sin tareas en cola</span>
+      <button id="btn-jump-console" class="btn btn-sm">💻 Ver Consola en Vivo</button>
+    </div>
+  </footer>
+
+  <!-- MODAL DE ACTUALIZACIÓN REMOTA OTA CON CONSENTIMIENTO -->
+  <div id="ota-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="font-size:17px;">🔄 Actualización Remota Disponible (OTA)</h3>
+        <span class="risk-badge risk-low">Verificado SHA-256</span>
+      </div>
+      <div id="ota-modal-body" style="font-size:13px; color:var(--text-secondary); line-height:1.5;"></div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:6px;">
+        <button id="btn-ota-postpone" class="btn">Posponer</button>
+        <button id="btn-ota-confirm" class="btn btn-primary">⚡ Actualizar Binario y Catálogos Ahora</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
