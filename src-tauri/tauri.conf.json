@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WinApex",
+  "productName": "Blackwall",
   "version": "1.0.0",
-  "identifier": "com.winapex.optimizer",
+  "identifier": "com.blackwall.optimizer",
   "build": {
     "frontendDist": "../src",
     "devUrl": "http://localhost:3847"
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "WinApex — Auditoría Profunda de Hardware, Optimización & Debloat (Win 10/11)",
+        "title": "Blackwall — Auditoría Profunda de Hardware, Optimización & Debloat (Win 10/11)",
         "width": 1380,
         "height": 860,
         "minWidth": 1100,

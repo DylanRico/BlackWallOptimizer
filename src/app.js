@@ -1,5 +1,5 @@
 // ============================================================================
-// WinApex — Frontend Controller (Compatible con Tauri v2 Native IPC + Bridge)
+// Blackwall — Frontend Controller (Compatible con Tauri v2 Native IPC + Bridge)
 // ============================================================================
 
 const state = {
@@ -16,7 +16,7 @@ const state = {
   liveScripts: [],
   restoreInfo: { protectionEnabled: true, points: [] },
   consoleLogs: [
-    "[SISTEMA] WinApex inicializado correctamente en arquitectura multihilo.",
+    "[SISTEMA] Blackwall inicializado correctamente en arquitectura multihilo.",
     "[SEGURIDAD] Guardián de Puntos de Restauración activo antes de modificaciones."
   ],
   optDeviceFilter: "auto", // auto | laptop | desktop | all
@@ -583,7 +583,7 @@ function bindHardwareEvents() {
   if (btnJson) {
     btnJson.addEventListener("click", () => {
       downloadFile(
-        `WinApex-Hardware-${state.hardware.chassis.serialNumber}.json`,
+        `Blackwall-Hardware-${state.hardware.chassis.serialNumber}.json`,
         JSON.stringify(state.hardware, null, 2),
         "application/json"
       );
@@ -596,7 +596,7 @@ function bindHardwareEvents() {
       const h = state.hardware;
       const txt = [
         "====================================================================",
-        ` REPORTE TÉCNICO DE AUDITORÍA WINAPEX — ${h.scannedAt}`,
+        ` REPORTE TÉCNICO DE AUDITORÍA BLACKWALL — ${h.scannedAt}`,
         "====================================================================",
         `Equipo:          ${h.chassis.manufacturer} ${h.chassis.model} (${h.chassis.deviceType})`,
         `Serial BIOS:     ${h.chassis.serialNumber} | SKU: ${h.chassis.sku}`,
@@ -610,7 +610,7 @@ function bindHardwareEvents() {
         `Batería:         Salud ${h.battery.healthPercent}% (Desgaste ${h.battery.wearLevelPercent}%) — Diseño: ${h.battery.designedCapacityMwh} mWh / Actual: ${h.battery.fullChargedCapacityMwh} mWh`,
         `Sistema Oper.:   ${h.osNetwork.caption} ${h.osNetwork.displayVersion} (Build ${h.osNetwork.buildNumber})`
       ].join("\r\n");
-      downloadFile(`WinApex-Reporte-${h.chassis.serialNumber}.txt`, txt, "text/plain");
+      downloadFile(`Blackwall-Reporte-${h.chassis.serialNumber}.txt`, txt, "text/plain");
     });
   }
 
@@ -618,11 +618,11 @@ function bindHardwareEvents() {
   if (btnHtml) {
     btnHtml.addEventListener("click", () => {
       const h = state.hardware;
-      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Reporte WinApex - ${h.chassis.serialNumber}</title>
+      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Reporte Blackwall - ${h.chassis.serialNumber}</title>
       <style>body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#f8fafc;padding:32px;max-width:980px;margin:auto}
       .box{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:18px;margin-bottom:16px}
       h1,h2{color:#38bdf8;margin-top:0}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #334155;text-align:left}</style></head>
-      <body><h1>Reporte de Auditoría Profunda WinApex</h1>
+      <body><h1>Reporte de Auditoría Profunda Blackwall</h1>
       <div class="box"><h2>Identificación del Equipo (${h.chassis.deviceType})</h2>
       <p><b>Marca / Modelo:</b> ${h.chassis.manufacturer} ${h.chassis.model}<br>
       <b>Número de Serie BIOS:</b> ${h.chassis.serialNumber} | <b>UUID:</b> ${h.chassis.uuid}<br>
@@ -636,7 +636,7 @@ function bindHardwareEvents() {
       <p><b>Batería:</b> Salud ${h.battery.healthPercent}% (Desgaste: ${h.battery.wearLevelPercent}%) — Diseño: ${h.battery.designedCapacityMwh} mWh / Carga Completa: ${h.battery.fullChargedCapacityMwh} mWh</p>
       <p><b>Unidades:</b> ${h.storage.map(d => `${d.friendlyName} (${d.sizeGb} GB ${d.busType}, Salud ${d.healthPercent}%)`).join(" | ")}</p></div>
       </body></html>`;
-      downloadFile(`WinApex-Reporte-${h.chassis.serialNumber}.html`, html, "text/html");
+      downloadFile(`Blackwall-Reporte-${h.chassis.serialNumber}.html`, html, "text/html");
     });
   }
 }
@@ -789,7 +789,7 @@ function bindTweaksEvents() {
       const scope = isLap ? "laptop" : "desktop";
       const safeTweaks = state.tweaks.filter(t => t.riskLevel === "low" && t.deviceScope.includes(scope));
       setStatus(`🛡️ Creando Punto de Restauración antes de aplicar ${safeTweaks.length} tweaks...`, "Ejecutando lote...");
-      await invokeBackend("create_restore_point", { description: `WinApex Auto-Backup (${scope.toUpperCase()})` });
+      await invokeBackend("create_restore_point", { description: `Blackwall Auto-Backup (${scope.toUpperCase()})` });
       for (const tw of safeTweaks) {
         await runTweakOperation(tw, "apply", true);
       }
@@ -807,7 +807,7 @@ async function runTweakOperation(tweak, mode, skipRestorePoint = false) {
     if (isApply && state.autoRestoreBeforeTweak && !skipRestorePoint) {
       setStatus("🛡️ Verificando Punto de Restauración previo...", tweak.title);
       appendLog(`Creando punto de restauración preventivo antes de: ${tweak.title}`);
-      await invokeBackend("create_restore_point", { description: `WinApex Pre-${tweak.id}` });
+      await invokeBackend("create_restore_point", { description: `Blackwall Pre-${tweak.id}` });
     }
     setStatus(`⚙️ ${isApply ? "Aplicando" : "Revirtiendo"}: ${tweak.title}...`, "Ejecutando PowerShell/Reg...");
     appendLog(`${isApply ? "[APPLY]" : "[UNDO]"} ${tweak.title} -> ${cmds.join(" ; ")}`);
@@ -994,7 +994,7 @@ function renderMonitorView() {
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💻 1. Cola y Consola Interna de Ejecución de WinApex</div>
+        <div class="card-title">💻 1. Cola y Consola Interna de Ejecución de Blackwall</div>
         <button id="btn-clear-console" class="btn btn-sm">🧹 Limpiar Consola</button>
       </div>
       <pre id="internal-console-box" class="console-box">${escapeHtml(state.consoleLogs.join("\n"))}</pre>
@@ -1073,7 +1073,7 @@ function renderSafetyView() {
       <div>
         <div class="device-banner-title">🛡️ Módulo de Seguridad, Puntos de Restauración y Reparación</div>
         <div class="device-banner-meta">
-          WinApex verifica que la Protección del Sistema esté habilitada y crea un Punto de Restauración automáticamente antes de aplicar tweaks.
+          Blackwall verifica que la Protección del Sistema esté habilitada y crea un Punto de Restauración automáticamente antes de aplicar tweaks.
         </div>
       </div>
       <button id="btn-refresh-rp" class="btn btn-sm">🔄 Actualizar Lista de Puntos</button>
@@ -1197,7 +1197,7 @@ function bindSafetyEvents() {
       setStatus("💾 Exportando respaldo del Registro...", "reg export");
       const res = await invokeBackend("execute_tweak_commands", {
         commands: [
-          "$out = Join-Path $env:USERPROFILE 'Desktop\\WinApex-Registry-Backup.reg'",
+          "$out = Join-Path $env:USERPROFILE 'Desktop\\Blackwall-Registry-Backup.reg'",
           "reg export 'HKCU\\Control Panel\\Desktop' $out /y",
           "Write-Output \"Backup guardado en: $out\""
         ]
@@ -1225,7 +1225,7 @@ async function createManualRestorePoint() {
   appendLog("Solicitando creación de Punto de Restauración en unidad C:\\...");
   try {
     const res = await invokeBackend("create_restore_point", {
-      description: `WinApex Manual Checkpoint (${new Date().toLocaleDateString()})`
+      description: `Blackwall Manual Checkpoint (${new Date().toLocaleDateString()})`
     });
     if (res.stdout) appendLog(res.stdout, "RESTORE");
     await refreshRestorePoints();
@@ -1260,7 +1260,7 @@ function setupModalsAndQuickButtons() {
         ${(v.changelog || []).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
       <div style="margin-top:12px; padding:10px; border-radius:8px; background:var(--bg-app); font-size:11.5px;">
-        🔒 <b>Mecanismo Zero-Lock Portable:</b> Si aceptas, WinApex verificará la firma SHA-256 (<code>${escapeHtml(v.binary?.sha256?.slice(0, 20) || "e3b0c442...")}...</code>), renombrará el binario en uso a <code>WinApex.exe.old</code> mediante <code>MoveFileExW</code> y actualizará los catálogos en caliente.
+        🔒 <b>Mecanismo Zero-Lock Portable:</b> Si aceptas, Blackwall verificará la firma SHA-256 (<code>${escapeHtml(v.binary?.sha256?.slice(0, 20) || "e3b0c442...")}...</code>), renombrará el binario en uso a <code>Blackwall.exe.old</code> mediante <code>MoveFileExW</code> y actualizará los catálogos en caliente.
       </div>
     `;
     modal.classList.remove("hidden");
@@ -1283,7 +1283,7 @@ function setupModalsAndQuickButtons() {
       if (res.stdout) appendLog(res.stdout, "OTA");
       await loadCatalogs();
       document.getElementById("btn-ota-check").textContent = `✓ OTA v${state.version?.appVersion || "1.1.0"}`;
-      setStatus(`🟢 WinApex actualizado a la versión v${state.version?.appVersion || "1.1.0"}`, "Completado");
+      setStatus(`🟢 Blackwall actualizado a la versión v${state.version?.appVersion || "1.1.0"}`, "Completado");
       renderActiveTab();
     } catch (err) {
       appendLog(`Error en OTA: ${err.message}`, "ERROR");

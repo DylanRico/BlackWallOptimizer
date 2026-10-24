@@ -1,5 +1,5 @@
 @echo off
-title WinApex — Administrador
+title Blackwall — Administrador
 cd /d "%~dp0"
 
 :: Verificar privilegios de Administrador (UAC)
@@ -10,12 +10,12 @@ if %errorLevel% neq 0 (
     exit /b 0
 )
 
-if exist "src-tauri\target\release\winapex.exe" (
-    start "" "src-tauri\target\release\winapex.exe"
+if exist "src-tauri\target\release\blackwall.exe" (
+    start "" "src-tauri\target\release\blackwall.exe"
     exit /b 0
 )
 
-echo Iniciando motor nativo WinApex con privilegios de Administrador...
+echo Iniciando motor nativo Blackwall con privilegios de Administrador...
 start /b node dev-bridge.mjs
 timeout /t 1 /nobreak >nul
 start "" msedge.exe --app=http://localhost:3847 --window-size=1380,860

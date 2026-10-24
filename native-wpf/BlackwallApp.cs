@@ -26,19 +26,19 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 
 // Metadatos Oficiales PE Win32 (Evita falsos positivos heurísticos ML en antivirus)
-[assembly: AssemblyTitle("WinApex System & Hardware Suite")]
+[assembly: AssemblyTitle("Blackwall System & Hardware Suite")]
 [assembly: AssemblyDescription("Hardware Audit, System Optimization and Package Manager Utility for Windows 10/11")]
 [assembly: AssemblyConfiguration("Release")]
-[assembly: AssemblyCompany("WinApex Engineering")]
-[assembly: AssemblyProduct("WinApex Desktop Suite")]
-[assembly: AssemblyCopyright("Copyright © 2026 WinApex Engineering. All rights reserved.")]
-[assembly: AssemblyTrademark("WinApex")]
+[assembly: AssemblyCompany("Blackwall Engineering")]
+[assembly: AssemblyProduct("Blackwall Desktop Suite")]
+[assembly: AssemblyCopyright("Copyright © 2026 Blackwall Engineering. All rights reserved.")]
+[assembly: AssemblyTrademark("Blackwall")]
 [assembly: ComVisible(false)]
 [assembly: Guid("9f8b4e3a-6c21-4d58-9b7a-1e4c8d9f0a2b")]
 [assembly: AssemblyVersion("1.2.0.0")]
 [assembly: AssemblyFileVersion("1.2.0.0")]
 
-namespace WinApex
+namespace Blackwall
 {
     public class Program
     {
@@ -124,7 +124,7 @@ namespace WinApex
         public MainWindow()
         {
             bool isAdmin = IsAdministrator();
-            Title = "WinApex v1.2 — Suite Nativa de Auditoría, Optimización e Instalación Desatendida" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
+            Title = "Blackwall v1.2 — Suite Nativa de Auditoría, Optimización e Instalación Desatendida" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
             Width = 1380;
             Height = 860;
             MinWidth = 1080;
@@ -216,7 +216,7 @@ namespace WinApex
             {
                 if (resourceName == "tweaks.json" || resourceName == "apps.json")
                 {
-                    string otaCacheFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WinApex\Catalogs", resourceName);
+                    string otaCacheFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs", resourceName);
                     if (File.Exists(otaCacheFile))
                         return File.ReadAllText(otaCacheFile, Encoding.UTF8);
                 }
@@ -784,7 +784,7 @@ namespace WinApex
             if (apply && _autoRestorePoint)
             {
                 SetStatus("🛡️ Verificando Punto de Restauración nativo...", title);
-                await CreateRestorePointNativeInternalAsync("WinApex Pre-" + id);
+                await CreateRestorePointNativeInternalAsync("Blackwall Pre-" + id);
             }
 
             SetStatus((apply ? "⚡ Aplicando nativamente: " : "↩️ Revirtiendo nativamente: ") + title, id);
@@ -1003,7 +1003,7 @@ namespace WinApex
             {
                 try
                 {
-                    string pkgFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WinApex\Packages");
+                    string pkgFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Packages");
                     if (!Directory.Exists(pkgFolder)) Directory.CreateDirectory(pkgFolder);
                     string targetFile = Path.Combine(pkgFolder, "Setup_" + id + ext);
                     if (File.Exists(targetFile)) File.Delete(targetFile);
@@ -1013,7 +1013,7 @@ namespace WinApex
 
                     using (WebClient wc = new WebClient())
                     {
-                        wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WinApex/1.2");
+                        wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Blackwall/1.2");
                         wc.DownloadProgressChanged += (s, ev) =>
                         {
                             double mbRecv = Math.Round(ev.BytesReceived / (1024.0 * 1024.0), 1);
@@ -1133,7 +1133,7 @@ namespace WinApex
         {
             SetStatus("🛡️ Creando Punto de Restauración nativo en C:\\...", "SystemRestore WMI");
             AppendLog("Invocando API nativa root\\default:SystemRestore.CreateRestorePoint...", "SAFETY");
-            bool ok = await CreateRestorePointNativeInternalAsync("WinApex Restore Point (" + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + ")");
+            bool ok = await CreateRestorePointNativeInternalAsync("Blackwall Restore Point (" + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + ")");
             if (ok)
             {
                 AppendLog("Punto de Restauración creado exitosamente.", "SAFETY");
@@ -1141,7 +1141,7 @@ namespace WinApex
             }
             else
             {
-                AppendLog("Nota: Para crear Puntos de Restauración, ejecuta WinApex como Administrador (Botón 'Elevar a Admin').", "WARN");
+                AppendLog("Nota: Para crear Puntos de Restauración, ejecuta Blackwall como Administrador (Botón 'Elevar a Admin').", "WARN");
                 SetStatus("🟡 Requiere permisos de Administrador para crear Punto de Restauración", "Aviso");
             }
             await RefreshRestorePointsNativeAsync();
@@ -1379,7 +1379,7 @@ namespace WinApex
             StackPanel titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             titleStack.Children.Add(new TextBlock
             {
-                Text = "WinApex v1.2 — Nativo Firmado",
+                Text = "Blackwall v1.2 — Nativo Firmado",
                 Foreground = TextPrimary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 15
@@ -2173,7 +2173,7 @@ namespace WinApex
 
             root.Children.Add(CreateBanner(
                 "📦 Descarga e Instalación 100% Silenciosa (Motor Dual: WinGet Nativo + HTTPS Directo C#)",
-                "Si un PC no tiene WinGet o el antivirus limita scripts, WinApex descarga el instalador oficial por HTTPS nativo en C# y lo instala en silencio.",
+                "Si un PC no tiene WinGet o el antivirus limita scripts, Blackwall descarga el instalador oficial por HTTPS nativo en C# y lo instala en silencio.",
                 topBtns
             ));
 
@@ -2261,8 +2261,8 @@ namespace WinApex
             }
             catch { }
 
-            // 3. Caché local persistente en %LocalAppData%\WinApex\icons
-            string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WinApex\icons");
+            // 3. Caché local persistente en %LocalAppData%\Blackwall\icons
+            string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\icons");
             string cachePath = Path.Combine(cacheDir, iconName);
             if (File.Exists(cachePath))
             {
@@ -2291,7 +2291,7 @@ namespace WinApex
                         if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
                         using (var wc = new WebClient())
                         {
-                            wc.Headers.Add("User-Agent", "WinApex/2.0");
+                            wc.Headers.Add("User-Agent", "Blackwall/2.0");
                             byte[] data = wc.DownloadData(iconUrl);
                             File.WriteAllBytes(cachePath, data);
 
@@ -2501,7 +2501,7 @@ namespace WinApex
             StackPanel consoleStack = new StackPanel();
             consoleStack.Children.Add(new TextBlock
             {
-                Text = "💻 1. Cola y Consola Interna de Ejecución de WinApex",
+                Text = "💻 1. Cola y Consola Interna de Ejecución de Blackwall",
                 Foreground = TextPrimary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14,
@@ -2622,7 +2622,7 @@ namespace WinApex
             StackPanel root = new StackPanel();
             root.Children.Add(CreateBanner(
                 "🛡️ Módulo de Seguridad, Puntos de Restauración y Reparación del Sistema",
-                "WinApex utiliza la API WMI nativa root\\default:SystemRestore sin scripts externos."
+                "Blackwall utiliza la API WMI nativa root\\default:SystemRestore sin scripts externos."
             ));
 
             UniformGrid grid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 14) };
@@ -2699,7 +2699,7 @@ namespace WinApex
             regBtn.Click += async (s, e) =>
             {
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                string outFile = Path.Combine(desktop, "WinApex-Registry-Backup.reg");
+                string outFile = Path.Combine(desktop, "Blackwall-Registry-Backup.reg");
                 await Task.Run(() => RunSystemToolDirect("reg.exe", "export \"HKCU\\Control Panel\\Desktop\" \"" + outFile + "\" /y"));
                 AppendLog("Backup exportado en: " + outFile, "BACKUP");
                 SetStatus("🟢 Backup .reg exportado al Escritorio", "Listo");
@@ -2770,7 +2770,7 @@ namespace WinApex
         {
             try
             {
-                string cfgFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WinApex\ota_manifest_url.txt");
+                string cfgFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\ota_manifest_url.txt");
                 if (File.Exists(cfgFile))
                 {
                     string custom = File.ReadAllText(cfgFile, Encoding.UTF8).Trim();
@@ -2780,14 +2780,14 @@ namespace WinApex
             catch { }
             return _versionInfo != null && _versionInfo.ContainsKey("manifestUrl")
                 ? GetStr(_versionInfo, "manifestUrl")
-                : "https://raw.githubusercontent.com/dylan/WinApex/main/catalogs/version.json";
+                : "https://raw.githubusercontent.com/dylan/Blackwall/main/catalogs/version.json";
         }
 
         private void SaveConfiguredOtaManifestUrl(string url)
         {
             try
             {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinApex");
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Blackwall");
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(Path.Combine(dir, "ota_manifest_url.txt"), url.Trim(), Encoding.UTF8);
             }
@@ -2803,7 +2803,7 @@ namespace WinApex
                     using (WebClient wc = new WebClient())
                     {
                         wc.Encoding = Encoding.UTF8;
-                        wc.Headers.Add("User-Agent", "WinApex-OTA/1.2");
+                        wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
                         wc.Headers.Add("Cache-Control", "no-cache");
                         string sep = url.Contains("?") ? "&" : "?";
                         string raw = wc.DownloadString(url + sep + "t=" + DateTime.UtcNow.Ticks);
@@ -2861,7 +2861,7 @@ namespace WinApex
 
             Window dlg = new Window
             {
-                Title = "WinApex — Centro de Actualización Remota (OTA) para Todos tus PCs",
+                Title = "Blackwall — Centro de Actualización Remota (OTA) para Todos tus PCs",
                 Width = 640,
                 Height = 520,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -2880,7 +2880,7 @@ namespace WinApex
             });
             root.Children.Add(new TextBlock
             {
-                Text = "Cuando publiques una nueva versión o catálogo en tu repositorio (GitHub / Servidor), todos los PCs que tengan WinApex.exe descargarán los cambios y se auto-reemplazarán en caliente.",
+                Text = "Cuando publiques una nueva versión o catálogo en tu repositorio (GitHub / Servidor), todos los PCs que tengan Blackwall.exe descargarán los cambios y se auto-reemplazarán en caliente.",
                 Foreground = TextSecondary,
                 FontSize = 12.2,
                 TextWrapping = TextWrapping.Wrap,
@@ -2926,7 +2926,7 @@ namespace WinApex
                        "Manifiesto configurado: " + manifestUrl + "\r\n\r\n" +
                        "Opciones disponibles:\r\n" +
                        "1. 'Comprobar y Sincronizar Catálogos': Descarga tweaks.json y apps.json remotos al instante sin reiniciar.\r\n" +
-                       "2. 'Auto-Actualizar Ejecutable (.exe)': Descarga el nuevo WinApex.exe remoto, verifica su firma SHA-256, renombra el ejecutable en uso a WinApex.exe.old y reinicia automáticamente la nueva versión."
+                       "2. 'Auto-Actualizar Ejecutable (.exe)': Descarga el nuevo Blackwall.exe remoto, verifica su firma SHA-256, renombra el ejecutable en uso a Blackwall.exe.old y reinicia automáticamente la nueva versión."
             };
             root.Children.Add(statusBox);
 
@@ -3006,13 +3006,13 @@ namespace WinApex
                     string tweaksUrl = GetStr(cats, "tweaksUrl");
                     string appsUrl = GetStr(cats, "appsUrl");
 
-                    string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WinApex\Catalogs");
+                    string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs");
                     if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
 
                     using (WebClient wc = new WebClient())
                     {
                         wc.Encoding = Encoding.UTF8;
-                        wc.Headers.Add("User-Agent", "WinApex-OTA/1.2");
+                        wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
                         if (!string.IsNullOrEmpty(tweaksUrl))
                         {
                             string tJson = wc.DownloadString(tweaksUrl + "?t=" + DateTime.UtcNow.Ticks);
@@ -3058,7 +3058,7 @@ namespace WinApex
 
                 using (WebClient wc = new WebClient())
                 {
-                    wc.Headers.Add("User-Agent", "WinApex-OTA/1.2");
+                    wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
                     wc.DownloadProgressChanged += (s, ev) =>
                     {
                         SetStatus("⬇️ Descargando actualización OTA: " + ev.ProgressPercentage + "%", "OTA");
@@ -3096,7 +3096,7 @@ namespace WinApex
                 File.Move(currentExe, oldBackupFile);
                 File.Move(tempUpdateFile, currentExe);
 
-                logBox.Text += "\r\n✅ Ejecutable actualizado correctamente. Reiniciando WinApex...";
+                logBox.Text += "\r\n✅ Ejecutable actualizado correctamente. Reiniciando Blackwall...";
                 Process.Start(currentExe);
                 Application.Current.Shutdown();
             }
@@ -3115,7 +3115,7 @@ namespace WinApex
 
             SaveFileDialog sfd = new SaveFileDialog
             {
-                FileName = "WinApex-Reporte-" + serial + "." + format,
+                FileName = "Blackwall-Reporte-" + serial + "." + format,
                 Filter = format.ToUpperInvariant() + " Files (*." + format + ")|*." + format
             };
             if (sfd.ShowDialog(this) == true)

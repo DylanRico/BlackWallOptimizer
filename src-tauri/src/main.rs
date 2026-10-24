@@ -107,5 +107,5 @@ fn main() {
             perform_ota_update
         ])
         .run(tauri::generate_context!())
-        .expect("Error al iniciar la aplicación WinApex");
+        .expect("Error al iniciar la aplicación Blackwall");
 }

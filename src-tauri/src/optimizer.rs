@@ -149,7 +149,7 @@ pub async fn install_app_unattended(
          if (-not $ok -and '{1}' -ne '') {{ \
              Write-Output 'Activando motor Fallback directo para {0}...'; \
              $ext = if ('{1}' -match '\\.msi$') {{ '.msi' }} else {{ '.exe' }}; \
-             $out = Join-Path $env:TEMP ('winapex_pkg_' + [guid]::NewGuid().ToString() + $ext); \
+             $out = Join-Path $env:TEMP ('blackwall_pkg_' + [guid]::NewGuid().ToString() + $ext); \
              Invoke-WebRequest -Uri '{1}' -OutFile $out -UseBasicParsing; \
              if ($ext -eq '.msi') {{ \
                  Start-Process -FilePath 'msiexec.exe' -ArgumentList \"/i `\"$out`\" {2}\" -Wait -NoNewWindow \

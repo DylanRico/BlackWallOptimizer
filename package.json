@@ -1,7 +1,7 @@
 {
-  "name": "winapex",
+  "name": "blackwall",
   "version": "1.0.0",
-  "description": "WinApex — Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido (Rust + Tauri v2)",
+  "description": "Blackwall — Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido (Rust + Tauri v2)",
   "type": "module",
   "scripts": {
     "start": "node dev-bridge.mjs",

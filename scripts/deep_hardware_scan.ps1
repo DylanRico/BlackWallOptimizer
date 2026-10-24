@@ -196,7 +196,7 @@ if ($batWin32) {
             $rateMw = if ($bStat.DischargeRate -gt 0) { [int64]$bStat.DischargeRate } elseif ($bStat.ChargeRate -gt 0) { [int64]$bStat.ChargeRate } else { 0 }
         }
         if ($designed -le 0) {
-            $tmpXml = Join-Path $env:TEMP "winapex_bat.xml"
+            $tmpXml = Join-Path $env:TEMP "blackwall_bat.xml"
             powercfg /batteryreport /xml /output $tmpXml | Out-Null
             if (Test-Path $tmpXml) {
                 [xml]$xmlDoc = Get-Content $tmpXml -ErrorAction SilentlyContinue

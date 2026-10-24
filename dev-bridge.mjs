@@ -126,7 +126,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (cmd === "create_restore_point") {
-        const desc = String(payload.description || "WinApex Restore Point").replace(/'/g, "");
+        const desc = String(payload.description || "Blackwall Restore Point").replace(/'/g, "");
         const out = await runPowerShellCommands([
           "Enable-ComputerRestore -Drive 'C:\\' -ErrorAction SilentlyContinue",
           `Checkpoint-Computer -Description '${desc}' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction SilentlyContinue`,
@@ -155,7 +155,7 @@ const server = http.createServer(async (req, res) => {
           if (-not $ok -and '${fallbackUrl}' -ne '') {
             Write-Output "WinGet retornó estado no exitoso; activando descarga directa Fallback desde: ${fallbackUrl}"
             $ext = if ('${fallbackUrl}' -match '\\.msi$') { '.msi' } else { '.exe' }
-            $out = Join-Path $env:TEMP ("winapex_pkg_" + [guid]::NewGuid().ToString() + $ext)
+            $out = Join-Path $env:TEMP ("blackwall_pkg_" + [guid]::NewGuid().ToString() + $ext)
             Invoke-WebRequest -Uri '${fallbackUrl}' -OutFile $out -UseBasicParsing
             if ($ext -eq '.msi') {
               Start-Process -FilePath 'msiexec.exe' -ArgumentList "/i \`"$out\`" ${silentArgs}" -Wait -NoNewWindow
@@ -216,6 +216,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`====================================================================`);
-  console.log(` 🚀 WinApex Desktop Engine activo en: http://localhost:${PORT}`);
+  console.log(` 🚀 Blackwall Desktop Engine activo en: http://localhost:${PORT}`);
   console.log(`====================================================================`);
 });

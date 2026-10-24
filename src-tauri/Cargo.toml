@@ -1,8 +1,8 @@
 [package]
-name = "winapex"
+name = "blackwall"
 version = "1.0.0"
-description = "WinApex - Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido para Windows 10/11"
-authors = ["WinApex Architecture"]
+description = "Blackwall - Auditoría Profunda de Hardware, Optimización, Debloat e Instalador Desatendido para Windows 10/11"
+authors = ["Blackwall Architecture"]
 edition = "2021"
 
 [build-dependencies]
