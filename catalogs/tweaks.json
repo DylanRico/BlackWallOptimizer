@@ -1,11 +1,12 @@
 {
-  "schemaVersion": "2.0.0",
-  "lastUpdated": "2026-10-23T16:25:00Z",
+  "schemaVersion": "2.2.0",
+  "lastUpdated": "2026-10-23T23:15:00Z",
   "tweaks": [
     {
       "id": "laptop_modern_standby_network",
       "category": "optimization",
       "subcategory": "Energía y Batería (Laptop)",
+      "pack": "adaptive_power",
       "title": "Desactivar Red en Modern Standby (S0 Low Power Idle) en Batería",
       "description": "Impide que Windows mantenga la conexión Wi-Fi activa mientras la laptop tiene la tapa cerrada en batería, evitando drenaje nocturno y sobrecalentamiento en mochilas.",
       "benefits": [
@@ -14,24 +15,64 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["laptop", "batería", "modern standby", "suspensión", "calor", "energía", "s0"],
+      "deviceScope": [
+        "laptop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "laptop",
+        "batería",
+        "modern standby",
+        "suspensión",
+        "calor",
+        "energía",
+        "s0"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9", "name": "DCSettingIndex", "value": 0 },
-        { "type": "powercfg", "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 0" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9",
+          "name": "DCSettingIndex",
+          "value": 0
+        },
+        {
+          "type": "powercfg",
+          "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 0"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
       ],
       "undoOps": [
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9", "name": "DCSettingIndex" },
-        { "type": "powercfg", "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 1" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
-      ]
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\f15576e8-98b7-4186-b944-eafa664402d9",
+          "name": "DCSettingIndex"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setdcvalueindex scheme_current sub_none f15576e8-98b7-4186-b944-eafa664402d9 1"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
+      ],
+      "shortTitle": "Desactivar red en suspensión",
+      "summary": "Apaga el Wi-Fi al cerrar la tapa en batería para evitar calentamiento y descarga.",
+      "affects": null
     },
     {
       "id": "laptop_cpu_boost_efficiency",
       "category": "optimization",
       "subcategory": "Energía y Batería (Laptop)",
+      "pack": "adaptive_power",
       "title": "Turbo Boost Adaptativo Inteligente en Batería (Gestión Térmica)",
       "description": "Configura el modo de impulso de rendimiento del procesador en 'Eficiente Habilitado' cuando está en batería (DC) y 'Agresivo' al conectarse a corriente (AC).",
       "benefits": [
@@ -40,24 +81,68 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["laptop", "cpu", "temperatura", "turbo boost", "batería", "ventilador"],
+      "deviceScope": [
+        "laptop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "laptop",
+        "cpu",
+        "temperatura",
+        "turbo boost",
+        "batería",
+        "ventilador"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerSettings\\54533251-82be-4824-96c1-47b60b740d00\\be337238-0d82-4146-a960-4f3749d470c7", "name": "Attributes", "value": 2 },
-        { "type": "powercfg", "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 3" },
-        { "type": "powercfg", "args": "/setacvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerSettings\\54533251-82be-4824-96c1-47b60b740d00\\be337238-0d82-4146-a960-4f3749d470c7",
+          "name": "Attributes",
+          "value": 2
+        },
+        {
+          "type": "powercfg",
+          "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 3"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setacvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
       ],
       "undoOps": [
-        { "type": "powercfg", "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerSettings\\54533251-82be-4824-96c1-47b60b740d00\\be337238-0d82-4146-a960-4f3749d470c7",
+          "name": "Attributes",
+          "value": 1
+        },
+        {
+          "type": "powercfg",
+          "args": "/setdcvalueindex scheme_current 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 2"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
+      ],
+      "shortTitle": "Turbo Boost adaptativo",
+      "summary": "Regula la potencia del procesador en batería para bajar temperatura y ganar autonomía.",
+      "affects": null
     },
     {
       "id": "laptop_hibernation_fast_boot",
       "category": "optimization",
       "subcategory": "Energía y Batería (Laptop)",
+      "pack": "adaptive_power",
       "title": "Hibernación Compacta (Hiberfil Reducido al 40%)",
       "description": "Mantiene activa la hibernación para proteger tus documentos si se agota la batería, pero comprime el archivo hiberfil.sys al 40% de la RAM.",
       "benefits": [
@@ -66,44 +151,113 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["hibernación", "ssd", "espacio", "laptop", "hiberfil"],
+      "deviceScope": [
+        "laptop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "hibernación",
+        "ssd",
+        "espacio",
+        "laptop",
+        "hiberfil"
+      ],
       "applyOps": [
-        { "type": "powercfg", "args": "/hibernate on" },
-        { "type": "powercfg", "args": "/hibernate /size 40" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
+          "name": "HibernateEnabled",
+          "value": 1
+        },
+        {
+          "type": "powercfg",
+          "args": "/hibernate on"
+        },
+        {
+          "type": "powercfg",
+          "args": "/hibernate /size 40"
+        }
       ],
       "undoOps": [
-        { "type": "powercfg", "args": "/hibernate /size 100" }
-      ]
+        {
+          "type": "powercfg",
+          "args": "/hibernate /size 100"
+        }
+      ],
+      "shortTitle": "Hibernación compacta",
+      "summary": "Reduce el archivo hiberfil.sys al 40% liberando entre 6 GB y 16 GB de almacenamiento.",
+      "affects": null
     },
     {
       "id": "desktop_ultimate_performance_plan",
       "category": "optimization",
       "subcategory": "Máxima Potencia (Desktop)",
-      "title": "Activar Plan de Energía de Alto Rendimiento Sin Latencia",
-      "description": "Activa el esquema de energía de Alto Rendimiento que evita el aparcamiento agresivo de núcleos y mantiene frecuencias estables.",
+      "pack": "adaptive_power",
+      "title": "Activar Plan de Energía Ultimate / Alto Rendimiento Sin Latencia",
+      "description": "Desbloquea y activa el esquema de energía de Máximo Rendimiento que evita el aparcamiento agresivo de núcleos (Core Parking) y mantiene frecuencias estables.",
       "benefits": [
         "Elimina la latencia de escalado de frecuencias del procesador",
         "Máxima estabilidad de fotogramas (frametimes) y respuesta inmediata"
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["desktop", "ultimate performance", "energía", "cpu", "latencia", "fps"],
+      "deviceScope": [
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "desktop",
+        "ultimate performance",
+        "energía",
+        "cpu",
+        "latencia",
+        "fps"
+      ],
       "applyOps": [
-        { "type": "powercfg", "args": "/duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61" },
-        { "type": "powercfg", "args": "/setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
+          "name": "CsEnabled",
+          "value": 0
+        },
+        {
+          "type": "powercfg",
+          "args": "/duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+        }
       ],
       "undoOps": [
-        { "type": "powercfg", "args": "/setactive 381b4222-f694-41f0-9685-ff5bb260df2e" }
-      ]
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
+          "name": "CsEnabled"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive 381b4222-f694-41f0-9685-ff5bb260df2e"
+        }
+      ],
+      "shortTitle": "Plan Máximo Rendimiento",
+      "summary": "Desbloquea el plan Ultimate Performance evitando aparcamiento de núcleos y latencia.",
+      "affects": null
     },
     {
       "id": "desktop_disable_pcie_usb_suspend",
       "category": "optimization",
       "subcategory": "Máxima Potencia (Desktop)",
+      "pack": "adaptive_power",
       "title": "Desactivar Suspensión Selectiva USB y Ahorro PCIe Link State (ASPM)",
       "description": "Evita que Windows corte energía a los puertos USB (ratón/teclado/audio DAC) y al bus PCI-Express de la tarjeta gráfica o NVMe.",
       "benefits": [
@@ -112,27 +266,74 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["desktop", "usb", "pcie", "latencia", "ratón", "gpu", "nvme"],
+      "deviceScope": [
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "desktop",
+        "usb",
+        "pcie",
+        "latencia",
+        "ratón",
+        "gpu",
+        "nvme"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\USB", "name": "DisableSelectiveSuspend", "value": 1 },
-        { "type": "powercfg", "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0" },
-        { "type": "powercfg", "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\USB",
+          "name": "DisableSelectiveSuspend",
+          "value": 1
+        },
+        {
+          "type": "powercfg",
+          "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
       ],
       "undoOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\USB", "name": "DisableSelectiveSuspend", "value": 0 },
-        { "type": "powercfg", "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1" },
-        { "type": "powercfg", "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 1" },
-        { "type": "powercfg", "args": "/setactive scheme_current" }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\USB",
+          "name": "DisableSelectiveSuspend",
+          "value": 0
+        },
+        {
+          "type": "powercfg",
+          "args": "/setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setacvalueindex scheme_current 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 1"
+        },
+        {
+          "type": "powercfg",
+          "args": "/setactive scheme_current"
+        }
+      ],
+      "shortTitle": "Cero ahorro en USB y PCIe",
+      "summary": "Evita micro-cortes de energía en ratones gaming de alto polling y tarjetas gráficas.",
+      "affects": null
     },
     {
       "id": "desktop_disable_hibernation_full",
       "category": "optimization",
       "subcategory": "Máxima Potencia (Desktop)",
-      "title": "Desactivar Hibernación e Inicio Rápido en PC de Escritorio",
+      "pack": "titus_essential",
+      "title": "Desactivar Hibernación e Inicio Rápido en PC de Escritorio (Chris Titus)",
       "description": "En equipos de sobremesa conectados a corriente, desactiva hiberfil.sys y el Inicio Rápido híbrido que suele acumular errores de drivers y uptime infinito.",
       "benefits": [
         "Libera el 100% del archivo hiberfil.sys (hasta 32 GB en disco C:)",
@@ -140,93 +341,1819 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["desktop", "hibernación", "fast startup", "inicio rápido", "ssd"],
+      "deviceScope": [
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "desktop",
+        "hibernación",
+        "fast startup",
+        "inicio rápido",
+        "ssd"
+      ],
       "applyOps": [
-        { "type": "powercfg", "args": "/hibernate off" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
+          "name": "HibernateEnabled",
+          "value": 0
+        },
+        {
+          "type": "powercfg",
+          "args": "/hibernate off"
+        }
       ],
       "undoOps": [
-        { "type": "powercfg", "args": "/hibernate on" }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
+          "name": "HibernateEnabled",
+          "value": 1
+        },
+        {
+          "type": "powercfg",
+          "args": "/hibernate on"
+        }
+      ],
+      "shortTitle": "Desactivar hibernación",
+      "summary": "Elimina por completo el archivo hiberfil.sys liberando hasta 32 GB en tu SSD.",
+      "affects": null
+    },
+    {
+      "id": "ceito_mouse_raw_no_accel",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Precisión de Ratón 1:1 Sin Aceleración (Curva Lineal Ceito)",
+      "description": "Desactiva por completo 'Mejorar la precisión del puntero' (MouseSpeed=0, Threshold1=0, Threshold2=0) para eliminar la interpolación de Windows y lograr movimiento 1:1 exacto en shooters.",
+      "benefits": [
+        "Movimiento 1:1 puro para memoria muscular en Valorant, CS2, Fortnite y Call of Duty",
+        "Elimina la variación de distancia según la velocidad de deslizamiento"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "mouse",
+        "ratón",
+        "aceleración",
+        "input lag",
+        "aim",
+        "gaming"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseSpeed",
+          "value": "0"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseThreshold1",
+          "value": "0"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseThreshold2",
+          "value": "0"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseSpeed",
+          "value": "1"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseThreshold1",
+          "value": "6"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Mouse",
+          "name": "MouseThreshold2",
+          "value": "10"
+        }
+      ],
+      "shortTitle": "Ratón 1:1 sin aceleración",
+      "summary": "Elimina la aceleración de Windows para lograr puntería lineal pura en shooters.",
+      "affects": null
+    },
+    {
+      "id": "ceito_mmcss_games_priority",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Prioridad Alta de CPU/GPU para Juegos en Planificador Multimedia (MMCSS)",
+      "description": "Configura el perfil 'Games' del planificador multimedia de Windows con GPU Priority=8, Priority=6 y Scheduling Category=High para dar preferencia en tiempo real al motor del juego.",
+      "benefits": [
+        "Mejora la estabilidad de los FPS mínimos (1% y 0.1% Lows)",
+        "Evita que procesos secundarios roben ciclos de GPU durante partidas"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "mmcss",
+        "gpu",
+        "cpu",
+        "fps",
+        "prioridad",
+        "gaming"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "GPU Priority",
+          "value": 8
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "Priority",
+          "value": 6
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "Scheduling Category",
+          "value": "High"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "SFIO Priority",
+          "value": "High"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "GPU Priority",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "Priority",
+          "value": 2
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "Scheduling Category",
+          "value": "Medium"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
+          "name": "SFIO Priority",
+          "value": "Normal"
+        }
+      ],
+      "shortTitle": "Prioridad alta para juegos",
+      "summary": "Configura el planificador multimedia para dar máxima preferencia de CPU/GPU al juego activo.",
+      "affects": null
+    },
+    {
+      "id": "ceito_hags_game_mode",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Activar Game Mode y Programación de GPU Acelerada por Hardware (HAGS)",
+      "description": "Habilita el Modo Juego nativo y HAGS (HwSchMode=2) para que la tarjeta gráfica gestione su propia cola de VRAM sin pasar por el cuello de botella de la CPU.",
+      "benefits": [
+        "Reduce la latencia de renderizado y habilita NVIDIA DLSS 3 Frame Generation",
+        "Aísla las tareas de Windows Update mientras un juego está abierto"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "hags",
+        "game mode",
+        "gpu",
+        "dlss",
+        "vram",
+        "fps"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\GameBar",
+          "name": "AutoGameModeEnabled",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\GameBar",
+          "name": "AllowAutoGameMode",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "HwSchMode",
+          "value": 2
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\GameBar",
+          "name": "AutoGameModeEnabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "HwSchMode",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Modo Juego y HAGS GPU",
+      "summary": "Permite que la tarjeta gráfica gestione su propia VRAM reduciendo cuello de botella en CPU.",
+      "affects": null
+    },
+    {
+      "id": "ceito_fso_presence_writer",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Optimizar Pantalla Completa Exclusiva y Desactivar GameBar Presence Writer",
+      "description": "Configura el comportamiento de pantalla completa para minimizar la latencia del compositor DWM y desactiva el monitoreo de presencia de Xbox al iniciar juegos.",
+      "benefits": [
+        "Menor Input Lag en modo pantalla completa",
+        "Evita que GameBarPresenceWriter.exe se ejecute en cada juego"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "fso",
+        "fullscreen",
+        "input lag",
+        "dwm",
+        "gaming"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_FSEBehaviorMode",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_HonorUserFSEBehaviorMode",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_DXGIHonorFSEWindowsCompatible",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\Windows.Gaming.GameBar.PresenceServer.Internal.PresenceWriter",
+          "name": "ActivationType",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_FSEBehaviorMode",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_HonorUserFSEBehaviorMode",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_DXGIHonorFSEWindowsCompatible",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\Windows.Gaming.GameBar.PresenceServer.Internal.PresenceWriter",
+          "name": "ActivationType",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Pantalla completa optimizada",
+      "summary": "Reduce el retraso de DWM y bloquea la inyección de GameBarPresenceWriter en juegos.",
+      "affects": null
+    },
+    {
+      "id": "ceito_gpu_tdr_telemetry",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Estabilizar Driver de GPU (TdrDelay) y Evitar Cierres en Juegos Pesados",
+      "description": "Amplía el margen de recuperación del controlador gráfico (TdrDelay=10s) para evitar que Windows reinicie el driver de vídeo ante cargas del 100% en motores como Unreal Engine 5.",
+      "benefits": [
+        "Previene errores 'DXGI_ERROR_DEVICE_HUNG' y cierres al escritorio",
+        "Mayor estabilidad bajo overclock o cargas gráficas extremas"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "gpu",
+        "tdr",
+        "nvidia",
+        "amd",
+        "crash",
+        "unreal engine"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "TdrDelay",
+          "value": 10
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "TdrDdiDelay",
+          "value": 10
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "TdrDelay"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+          "name": "TdrDdiDelay"
+        }
+      ],
+      "shortTitle": "Estabilizar driver gráfico",
+      "summary": "Amplía el tiempo de tolerancia TdrDelay evitando cierres al escritorio por sobrecarga.",
+      "affects": null
+    },
+    {
+      "id": "ceito_power_throttling_off",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Desactivar Power Throttling (Estrangulamiento de Frecuencia en Procesos)",
+      "description": "Deshabilita el estrangulamiento automático de energía (PowerThrottlingOff=1) para impedir que Windows reduzca los MHz de hilos de juegos, Discord o OBS.",
+      "benefits": [
+        "Frecuencias de reloj sostenidas sin caídas repentinas de rendimiento",
+        "Ideal para multitarea gaming + streaming o edición"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "power throttling",
+        "cpu",
+        "frecuencia",
+        "mhz",
+        "desktop"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerThrottling",
+          "name": "PowerThrottlingOff",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\Power\\PowerThrottling",
+          "name": "PowerThrottlingOff",
+          "value": 0
+        }
+      ],
+      "shortTitle": "Desactivar Power Throttling",
+      "summary": "Impide que Windows baje la frecuencia de reloj de aplicaciones y procesos en uso.",
+      "affects": null
+    },
+    {
+      "id": "ceito_keyboard_mouse_queues",
+      "category": "optimization",
+      "subcategory": "Gaming y Baja Latencia (Ceito)",
+      "pack": "ceito_gaming",
+      "title": "Optimizar Buffer de Entrada de Teclado y Ratón (DataQueueSize Competitivo)",
+      "description": "Ajusta el buffer de cola de mouclass y kbdclass a un tamaño ágil y seguro (32 paquetes) y elimina el retardo de repetición de teclas para respuesta inmediata.",
+      "benefits": [
+        "Procesamiento más directo de interrupciones de periféricos",
+        "Repetición de teclado instantánea sin retardo inicial"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Calibrado en valor seguro (32 entradas) compatible con ratones de 1000Hz a 8000Hz. Requiere reiniciar para aplicar.",
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ceito",
+        "teclado",
+        "ratón",
+        "queue",
+        "buffer",
+        "input lag"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\mouclass\\Parameters",
+          "name": "MouseDataQueueSize",
+          "value": 32
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\kbdclass\\Parameters",
+          "name": "KeyboardDataQueueSize",
+          "value": 32
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Keyboard",
+          "name": "KeyboardDelay",
+          "value": "0"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Keyboard",
+          "name": "KeyboardSpeed",
+          "value": "31"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\mouclass\\Parameters",
+          "name": "MouseDataQueueSize",
+          "value": 100
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\kbdclass\\Parameters",
+          "name": "KeyboardDataQueueSize",
+          "value": 100
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Keyboard",
+          "name": "KeyboardDelay",
+          "value": "1"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Keyboard",
+          "name": "KeyboardSpeed",
+          "value": "31"
+        }
+      ],
+      "shortTitle": "Buffer rápido de periféricos",
+      "summary": "Optimiza la cola de paquetes de ratón y teclado a 32 entradas para respuesta instantánea.",
+      "affects": "Requiere reiniciar. Calibrado para ratones de 1000Hz a 8000Hz."
     },
     {
       "id": "common_ui_responsiveness_menushowdelay",
       "category": "optimization",
-      "subcategory": "Rendimiento del Sistema y UI",
-      "title": "Acelerar Respuesta de Interfaz, Menús Contextuales y Prioridad de Primer Plano",
-      "description": "Reduce MenuShowDelay de 400ms a 10ms y optimiza Win32PrioritySeparation para dar máxima prioridad de CPU a la ventana activa.",
+      "subcategory": "Rendimiento del Sistema y RAM",
+      "pack": "ceito_gaming",
+      "title": "Acelerar Respuesta de Interfaz, Menús y Prioridad de Primer Plano (Win32Priority)",
+      "description": "Reduce MenuShowDelay de 400ms a 10ms, elimina AutoEndTasks colgados y optimiza Win32PrioritySeparation (0x26 / 38 dec) para dar prioridad de CPU a la ventana activa.",
       "benefits": [
-        "Sensación instantánea al abrir menús y ventanas",
-        "Mejor respuesta de aplicaciones en primer plano"
+        "Sensación instantánea al abrir menús contextuales y cambiar de ventana",
+        "Mejor asignación de quantum de CPU a la aplicación o juego en primer plano"
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["ui", "velocidad", "menú", "latencia", "win32priority"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ui",
+        "velocidad",
+        "menú",
+        "latencia",
+        "win32priority",
+        "ceito"
+      ],
       "applyOps": [
-        { "type": "reg_sz", "hive": "HKCU", "key": "Control Panel\\Desktop", "name": "MenuShowDelay", "value": "10" },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl", "name": "Win32PrioritySeparation", "value": 38 }
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Desktop",
+          "name": "MenuShowDelay",
+          "value": "10"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl",
+          "name": "Win32PrioritySeparation",
+          "value": 38
+        }
       ],
       "undoOps": [
-        { "type": "reg_sz", "hive": "HKCU", "key": "Control Panel\\Desktop", "name": "MenuShowDelay", "value": "400" },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl", "name": "Win32PrioritySeparation", "value": 2 }
-      ]
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Desktop",
+          "name": "MenuShowDelay",
+          "value": "400"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\PriorityControl",
+          "name": "Win32PrioritySeparation",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Menús y ventanas instantáneos",
+      "summary": "Baja el retraso de menús de 400ms a 10ms y da prioridad de CPU a la app en primer plano.",
+      "affects": null
+    },
+    {
+      "id": "ceito_svchost_ram_split",
+      "category": "optimization",
+      "subcategory": "Rendimiento del Sistema y RAM",
+      "pack": "titus_essential",
+      "title": "Consolidar Procesos svchost.exe en Memoria RAM (SvcHostSplitThreshold)",
+      "description": "Evita que Windows divida cada servicio del sistema en docenas de procesos svchost.exe independientes, reduciendo sobrecarga de tablas de procesos y consumo de RAM.",
+      "benefits": [
+        "Reduce entre 35 y 60 procesos activos en el Administrador de Tareas",
+        "Libera memoria RAM para juegos y aplicaciones"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "svchost",
+        "ram",
+        "procesos",
+        "memoria",
+        "titus",
+        "ceito"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control",
+          "name": "SvcHostSplitThresholdInKB",
+          "value": 38000000
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control",
+          "name": "SvcHostSplitThresholdInKB",
+          "value": 3670016
+        }
+      ],
+      "shortTitle": "Consolidar svchost en RAM",
+      "summary": "Agrupa servicios de Windows para reducir decenas de procesos activos en el sistema.",
+      "affects": null
+    },
+    {
+      "id": "ceito_ntfs_ssd_gaming",
+      "category": "optimization",
+      "subcategory": "Rendimiento del Sistema y RAM",
+      "pack": "ceito_gaming",
+      "title": "Optimizar Baja Latencia de Disco NTFS para SSDs (DisableLastAccess & 8dot3)",
+      "description": "Desactiva la actualización del atributo de 'Último Acceso' y la creación de nombres cortos antiguos MS-DOS (8dot3) al leer archivos en unidades SSD/NVMe.",
+      "benefits": [
+        "Acelera la carga de miles de archivos pequeños y texturas en juegos",
+        "Reduce escrituras innecesarias alargando la vida útil del SSD"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ntfs",
+        "ssd",
+        "nvme",
+        "disco",
+        "carga",
+        "ceito"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+          "name": "NtfsDisableLastAccessUpdate",
+          "value": 2147483649
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+          "name": "NtfsDisable8dot3NameCreation",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+          "name": "NtfsDisableLastAccessUpdate",
+          "value": 2147483648
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+          "name": "NtfsDisable8dot3NameCreation",
+          "value": 0
+        }
+      ],
+      "shortTitle": "Lectura rápida en SSD NTFS",
+      "summary": "Desactiva la marca de último acceso al leer archivos acelerando la carga de texturas.",
+      "affects": null
+    },
+    {
+      "id": "ceito_visual_effects_fast",
+      "category": "optimization",
+      "subcategory": "Rendimiento del Sistema y RAM",
+      "pack": "ceito_gaming",
+      "title": "Acelerar Efectos Visuales del Escritorio Conservando Fuentes Nítidas (ClearType)",
+      "description": "Desactiva las animaciones lentas al minimizar/maximizar ventanas y las transparencias acrílicas pesadas de la barra de tareas, pero conserva las fuentes suaves y vistas previas.",
+      "benefits": [
+        "Navegación por carpetas y ventanas instantánea sin esperas de animación",
+        "Menor uso de VRAM por parte de Desktop Window Manager (dwm.exe)"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Desactiva las transparencias y animaciones de minimizado en favor de la máxima velocidad visual.",
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "efectos visuales",
+        "transparencia",
+        "animaciones",
+        "dwm",
+        "ceito"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+          "name": "EnableTransparency",
+          "value": 0
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Desktop\\WindowMetrics",
+          "name": "MinAnimate",
+          "value": "0"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "TaskbarAnimations",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+          "name": "EnableTransparency",
+          "value": 1
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Desktop\\WindowMetrics",
+          "name": "MinAnimate",
+          "value": "1"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "TaskbarAnimations",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Efectos visuales ultra ágiles",
+      "summary": "Quita animaciones lentas y transparencias pesadas manteniendo fuentes nítidas y claras.",
+      "affects": "Desactiva efectos de desvanecimiento en favor de fluidez absoluta."
     },
     {
       "id": "common_network_throttling_nagle",
       "category": "optimization",
       "subcategory": "Red y Baja Latencia",
-      "title": "Eliminar Estrangulamiento de Red Multimedia (NetworkThrottlingIndex)",
-      "description": "Desactiva el límite artificial de paquetes de red que Windows impone cuando se reproducen medios o juegos (SystemResponsiveness = 0).",
+      "pack": "ceito_gaming",
+      "title": "Eliminar Estrangulamiento de Red Multimedia (NetworkThrottlingIndex & Responsiveness)",
+      "description": "Desactiva el límite artificial de paquetes de red que Windows impone cuando se reproducen medios o juegos (SystemResponsiveness = 0, NetworkThrottlingIndex = FFFFFFFF).",
       "benefits": [
         "Menor jitter y ping más estable en juegos online y videollamadas",
         "Máximo rendimiento de transferencia en redes Gigabit y Wi-Fi 6/7"
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["red", "ping", "latencia", "network", "gaming", "wifi", "ethernet"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "red",
+        "ping",
+        "latencia",
+        "network",
+        "gaming",
+        "wifi",
+        "ethernet",
+        "ceito"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "NetworkThrottlingIndex", "value": -1 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "SystemResponsiveness", "value": 0 }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile",
+          "name": "NetworkThrottlingIndex",
+          "value": -1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile",
+          "name": "SystemResponsiveness",
+          "value": 0
+        }
       ],
       "undoOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "NetworkThrottlingIndex", "value": 10 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile", "name": "SystemResponsiveness", "value": 20 }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile",
+          "name": "NetworkThrottlingIndex",
+          "value": 10
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile",
+          "name": "SystemResponsiveness",
+          "value": 20
+        }
+      ],
+      "shortTitle": "Red sin límites multimedia",
+      "summary": "Elimina el estrangulador de paquetes de red para lograr menor ping y estabilidad en juegos.",
+      "affects": null
     },
     {
       "id": "debloat_telemetry_diagtrack",
       "category": "debloat",
-      "subcategory": "Privacidad y Telemetría",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
       "title": "Desactivar Telemetría de Windows, Experiencias Conectadas y DiagTrack",
-      "description": "Configura AllowTelemetry al nivel mínimo permitido y desactiva el servicio DiagTrack de recolección de diagnóstico en segundo plano.",
+      "description": "Configura AllowTelemetry al nivel mínimo permitido (0) y desactiva los servicios DiagTrack y dmwappushservice de recolección de diagnóstico en segundo plano.",
       "benefits": [
         "Elimina escrituras constantes en segundo plano hacia servidores de telemetría",
-        "Reduce el uso de CPU/Disco en reposo"
+        "Reduce el uso de CPU, Red y Disco en reposo"
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["telemetría", "privacidad", "diagtrack", "datos", "microsoft"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "telemetría",
+        "privacidad",
+        "diagtrack",
+        "datos",
+        "microsoft",
+        "titus"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "name": "AllowTelemetry", "value": 0 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack", "name": "Start", "value": 4 },
-        { "type": "service_stop", "name": "DiagTrack" }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+          "name": "AllowTelemetry",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\DataCollection",
+          "name": "AllowTelemetry",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\dmwappushservice",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "service_stop",
+          "name": "DiagTrack"
+        },
+        {
+          "type": "service_stop",
+          "name": "dmwappushservice"
+        }
       ],
       "undoOps": [
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "name": "AllowTelemetry" },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack", "name": "Start", "value": 2 }
-      ]
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+          "name": "AllowTelemetry"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\DiagTrack",
+          "name": "Start",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\dmwappushservice",
+          "name": "Start",
+          "value": 3
+        }
+      ],
+      "shortTitle": "Desactivar telemetría",
+      "summary": "Apaga los servicios DiagTrack y recolección de diagnóstico continuo de Microsoft.",
+      "affects": null
+    },
+    {
+      "id": "debloat_ceip_compat_telemetry",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Desactivar CompatTelRunner.exe y Programa de Mejora de Experiencia (CEIP)",
+      "description": "Bloquea el evaluador de compatibilidad de telemetría (CompatTelRunner) y el programa CEIP, famosos por causar picos del 100% de uso de disco y CPU sin previo aviso.",
+      "benefits": [
+        "Elimina por completo los tirones causados por CompatTelRunner.exe",
+        "Menor temperatura y consumo en portátiles y sobremesa"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "compattelrunner",
+        "ceip",
+        "telemetría",
+        "disco 100%",
+        "cpu",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\SQMClient\\Windows",
+          "name": "CEIPEnable",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppCompat",
+          "name": "AITEnable",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppCompat",
+          "name": "DisableInventory",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\SQMClient\\Windows",
+          "name": "CEIPEnable"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppCompat",
+          "name": "AITEnable"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppCompat",
+          "name": "DisableInventory"
+        }
+      ],
+      "shortTitle": "Frenar CompatTelRunner",
+      "summary": "Bloquea el proceso que escanea tus discos causando picos inesperados del 100% de uso.",
+      "affects": null
+    },
+    {
+      "id": "debloat_activity_history",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Desactivar Historial de Actividad, Línea de Tiempo y Sincronización de Uso",
+      "description": "Impide que Windows almacene un registro cronológico de cada programa, documento y página que abres y evita su envío a los servidores de Microsoft.",
+      "benefits": [
+        "Máxima privacidad local sobre los archivos y aplicaciones que ejecutas",
+        "Elimina escrituras de base de datos de actividad en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "historial",
+        "actividad",
+        "timeline",
+        "privacidad",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "EnableActivityFeed",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "PublishUserActivities",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "UploadUserActivities",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "EnableActivityFeed"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "PublishUserActivities"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          "name": "UploadUserActivities"
+        }
+      ],
+      "shortTitle": "Historial de actividad",
+      "summary": "Impide que Windows registre y sincronice los programas y documentos que abres cada día.",
+      "affects": null
+    },
+    {
+      "id": "debloat_location_tracking",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Desactivar Rastreo de Ubicación Global y Servicio de Geolocalización",
+      "description": "Deshabilita el rastreo físico de ubicación mediante redes Wi-Fi e IP y pasa el servicio de geolocalización (lfsvc) a modo desactivado.",
+      "benefits": [
+        "Impide que aplicaciones UWP y servicios rastreen tu ubicación física",
+        "Detiene el servicio de sensores de ubicación en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "ubicación",
+        "gps",
+        "location",
+        "privacidad",
+        "lfsvc",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\LocationAndSensors",
+          "name": "DisableLocation",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\LocationAndSensors",
+          "name": "DisableLocationScripting",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\lfsvc",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "service_stop",
+          "name": "lfsvc"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\LocationAndSensors",
+          "name": "DisableLocation"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\LocationAndSensors",
+          "name": "DisableLocationScripting"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\lfsvc",
+          "name": "Start",
+          "value": 3
+        }
+      ],
+      "shortTitle": "Rastreo de ubicación",
+      "summary": "Desactiva el servicio de geolocalización global protegiendo tu privacidad física.",
+      "affects": null
+    },
+    {
+      "id": "debloat_advertising_id",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Bloquear ID de Publicidad, Perfilado de Usuario y Experiencias Personalizadas",
+      "description": "Desactiva el identificador único de publicidad de Windows y prohíbe que Microsoft utilice tus datos de diagnóstico para mostrarte anuncios personalizados.",
+      "benefits": [
+        "Elimina el rastreo publicitario entre aplicaciones de Windows",
+        "Desactiva las notificaciones de sugerencias comerciales"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "publicidad",
+        "anuncios",
+        "advertising id",
+        "privacidad",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AdvertisingInfo",
+          "name": "DisabledByGroupPolicy",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo",
+          "name": "Enabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\CloudContent",
+          "name": "DisableTailoredExperiencesWithDiagnosticData",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\AdvertisingInfo",
+          "name": "DisabledByGroupPolicy"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo",
+          "name": "Enabled",
+          "value": 1
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\CloudContent",
+          "name": "DisableTailoredExperiencesWithDiagnosticData"
+        }
+      ],
+      "shortTitle": "Bloquear ID de publicidad",
+      "summary": "Elimina el identificador de anuncios y las sugerencias comerciales dentro de Windows.",
+      "affects": null
+    },
+    {
+      "id": "debloat_wer_error_reporting",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Desactivar Informes de Errores de Windows (WerSvc) y Volcados a la Nube",
+      "description": "Desactiva la ventana de 'Windows está buscando una solución al problema' cuando una aplicación se cierra y evita el envío de volcados de memoria por red.",
+      "benefits": [
+        "Cierre instantáneo de aplicaciones bloqueadas sin quedarse congeladas",
+        "Evita subidas pesadas de archivos .dmp en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "wersvc",
+        "errores",
+        "crash",
+        "telemetría",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Error Reporting",
+          "name": "Disabled",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WerSvc",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "service_stop",
+          "name": "WerSvc"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Error Reporting",
+          "name": "Disabled"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WerSvc",
+          "name": "Start",
+          "value": 3
+        }
+      ],
+      "shortTitle": "Informes de errores (WerSvc)",
+      "summary": "Evita que las apps se queden congeladas intentando enviar volcados de error a la nube.",
+      "affects": null
+    },
+    {
+      "id": "debloat_wifi_sense",
+      "category": "debloat",
+      "subcategory": "Privacidad y Telemetría (Titus)",
+      "pack": "titus_essential",
+      "title": "Desactivar Wi-Fi Sense y Conexión Automática a Hotspots Abiertos",
+      "description": "Impide que Windows se conecte automáticamente a redes Wi-Fi abiertas no seguras y evita compartir metadatos de redes inalámbricas.",
+      "benefits": [
+        "Protege contra puntos de acceso Wi-Fi falsos (Evil Twin attacks)",
+        "Evita conexiones involuntarias a redes públicas lentas"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "wifi",
+        "wifi sense",
+        "seguridad",
+        "red",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config",
+          "name": "AutoConnectAllowedOEM",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config",
+          "name": "AutoConnectAllowedOEM",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Desactivar Wi-Fi Sense",
+      "summary": "Impide que el equipo se conecte solo a redes Wi-Fi públicas o comparta credenciales.",
+      "affects": null
+    },
+    {
+      "id": "debloat_services_manual_pack",
+      "category": "debloat",
+      "subcategory": "Servicios en Segundo Plano (Titus)",
+      "pack": "services_light",
+      "title": "Pasar Servicios Secundarios de Windows a Inicio Manual (Pack Chris Titus)",
+      "description": "Configura servicios no críticos (Mapas descargados, Control Parental, Fax, Demo de Tienda, Biometría inactiva, Servicios Xbox y Windows Insider) en modo Manual para que no consuman RAM al iniciar el PC.",
+      "benefits": [
+        "Reduce drásticamente el consumo de RAM al encender Windows",
+        "100% seguro: si una app necesita un servicio, Windows lo inicia bajo demanda"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "servicios",
+        "manual",
+        "ram",
+        "procesos",
+        "titus",
+        "winutil"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\MapsBroker",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WpcMonSvc",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\Fax",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\RetailDemo",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\PhoneSvc",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WalletService",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\wisvc",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\XblAuthManager",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\XblGameSave",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\XboxNetApiSvc",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "service_stop",
+          "name": "MapsBroker"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\MapsBroker",
+          "name": "Start",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\XblAuthManager",
+          "name": "Start",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Servicios a inicio manual",
+      "summary": "Pasa servicios secundarios (Mapas, Fax, Xbox inactivo) a manual: inician solo si se usan.",
+      "affects": null
+    },
+    {
+      "id": "debloat_sysmain_superfetch",
+      "category": "debloat",
+      "subcategory": "Servicios en Segundo Plano (Titus)",
+      "pack": "services_light",
+      "title": "Desactivar Servicio SysMain (Superfetch) en Unidades SSD / NVMe",
+      "description": "Detiene y deshabilita SysMain, un servicio pensado originalmente para discos duros mecánicos lentos que precarga archivos constantemente en RAM generando uso innecesario de disco en SSDs.",
+      "benefits": [
+        "Elimina lecturas/escrituras constantes de fondo en tu SSD NVMe",
+        "Evita micro-tirones de memoria durante sesiones de juego"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "sysmain",
+        "superfetch",
+        "ssd",
+        "nvme",
+        "ram",
+        "servicios",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\SysMain",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "service_stop",
+          "name": "SysMain"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\SysMain",
+          "name": "Start",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Desactivar SysMain en SSD",
+      "summary": "Detiene la precarga de RAM innecesaria en discos SSD modernos alargando su vida útil.",
+      "affects": null
+    },
+    {
+      "id": "debloat_remote_registry_diag",
+      "category": "debloat",
+      "subcategory": "Servicios en Segundo Plano (Titus)",
+      "pack": "services_light",
+      "title": "Desactivar Registro Remoto (RemoteRegistry) y Hosts de Diagnóstico Pesado",
+      "description": "Cierra por seguridad el servicio de modificación remota del Registro de Windows y pasa a manual los hosts de diagnóstico del sistema (WdiSystemHost / WdiServiceHost).",
+      "benefits": [
+        "Mayor seguridad frente a accesos remotos no autorizados en red local",
+        "Menor consumo de recursos de diagnóstico en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "remoteregistry",
+        "seguridad",
+        "diagnóstico",
+        "servicios",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WdiSystemHost",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WdiServiceHost",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "service_stop",
+          "name": "RemoteRegistry"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WdiSystemHost",
+          "name": "Start",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WdiServiceHost",
+          "name": "Start",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Bloquear registro remoto",
+      "summary": "Cierra vectores de acceso remoto y detiene hosts de diagnóstico pesado en segundo plano.",
+      "affects": null
+    },
+    {
+      "id": "debloat_windows_search_indexing",
+      "category": "debloat",
+      "subcategory": "Servicios en Segundo Plano (Titus)",
+      "pack": "services_light",
+      "title": "Desactivar Indexación Continua en Segundo Plano de Windows Search (WSearch)",
+      "description": "Detiene el indexador SearchIndexer.exe que escanea permanentemente todos los discos y consume RAM y CPU. Ideal si utilizas 'Everything (Voidtools)' para buscar archivos.",
+      "benefits": [
+        "Cero uso de disco y CPU por parte de SearchIndexer.exe",
+        "Libera entre 150 MB y 400 MB de RAM constantes"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Desactiva la indexación rápida del buscador clásico de Windows. Se recomienda instalar 'Everything' desde la pestaña de Apps.",
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "wsearch",
+        "searchindexer",
+        "indexación",
+        "disco",
+        "servicios",
+        "ceito",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WSearch",
+          "name": "Start",
+          "value": 4
+        },
+        {
+          "type": "service_stop",
+          "name": "WSearch"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\WSearch",
+          "name": "Start",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Pausar indexador de búsqueda",
+      "summary": "Detiene SearchIndexer.exe que escanea discos todo el día. Ideal si usas Everything.",
+      "affects": "La búsqueda del Explorador será más lenta si no usas Everything."
+    },
+    {
+      "id": "debloat_print_spooler_manual",
+      "category": "debloat",
+      "subcategory": "Servicios en Segundo Plano (Titus)",
+      "pack": "services_light",
+      "title": "Poner Servicio de Cola de Impresión (Print Spooler) en Inicio Manual",
+      "description": "Configura el servicio spoolsv.exe en modo Manual y lo detiene para que no esté ejecutándose 24/7 si no tienes una impresora física conectada.",
+      "benefits": [
+        "Elimina un vector clásico de vulnerabilidades (PrintNightmare) y libera memoria",
+        "Si necesitas imprimir más adelante, puedes revertirlo con 1 clic"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Si tienes una impresora conectada y la usas todos los días, mantén este ajuste en su valor de fábrica.",
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "impresora",
+        "spooler",
+        "print",
+        "servicios",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\Spooler",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "service_stop",
+          "name": "Spooler"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\Spooler",
+          "name": "Start",
+          "value": 2
+        }
+      ],
+      "shortTitle": "Cola de impresión a manual",
+      "summary": "Evita que el servicio spoolsv.exe corra 24/7 si no tienes impresora física conectada.",
+      "affects": "Si usas impresora a diario, déjalo en valor de fábrica."
     },
     {
       "id": "debloat_copilot_recall_ai",
       "category": "debloat",
-      "subcategory": "IA, Copilot y Recall",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "privacy_ai",
       "title": "Desactivar Windows Copilot y Windows Recall (Capturas de Pantalla IA)",
       "description": "Deshabilita el botón e integración de Copilot y bloquea por directiva de grupo el análisis de instantáneas Windows Recall en Windows 11.",
       "benefits": [
@@ -235,50 +2162,423 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["copilot", "recall", "ia", "ai", "privacidad", "win11", "24h2"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "copilot",
+        "recall",
+        "ia",
+        "ai",
+        "privacidad",
+        "win11",
+        "24h2"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot", "value": 1 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot", "value": 1 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI", "name": "DisableAIDataAnalysis", "value": 1 }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI",
+          "name": "DisableAIDataAnalysis",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+          "name": "TurnOffWindowsCopilot",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+          "name": "TurnOffWindowsCopilot",
+          "value": 1
+        }
       ],
       "undoOps": [
-        { "type": "reg_delete", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot" },
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot", "name": "TurnOffWindowsCopilot" },
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI", "name": "DisableAIDataAnalysis" }
-      ]
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI",
+          "name": "DisableAIDataAnalysis"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+          "name": "TurnOffWindowsCopilot"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+          "name": "TurnOffWindowsCopilot"
+        }
+      ],
+      "shortTitle": "Desactivar Copilot y Recall",
+      "summary": "Bloquea Copilot y las capturas continuas de pantalla de Windows Recall ahorrando RAM.",
+      "affects": null
+    },
+    {
+      "id": "debloat_cortana_websearch",
+      "category": "debloat",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "privacy_ai",
+      "title": "Desactivar Cortana y Búsqueda Conectada a la Nube",
+      "description": "Desactiva el asistente Cortana por directiva de sistema e impide que las búsquedas en el equipo envíen consultas a servidores web externos.",
+      "benefits": [
+        "Elimina procesos residuales de Cortana en segundo plano",
+        "Búsquedas locales más rápidas y privadas"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "cortana",
+        "búsqueda",
+        "voz",
+        "ia",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "AllowCortana",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "ConnectedSearchUseWeb",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "DisableWebSearch",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "AllowCortana"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "ConnectedSearchUseWeb"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
+          "name": "DisableWebSearch"
+        }
+      ],
+      "shortTitle": "Desactivar Cortana y web",
+      "summary": "Elimina Cortana y evita que las búsquedas del equipo envíen datos a la nube.",
+      "affects": null
     },
     {
       "id": "debloat_bing_start_widgets",
       "category": "debloat",
-      "subcategory": "Interfaz y Bloatware Visual",
-      "title": "Desactivar Búsqueda Web de Bing en Menú Inicio, Anuncios y Widgets",
-      "description": "Hace que el buscador del menú Inicio busque exclusivamente archivos y programas locales al instante, sin consultar Bing ni cargar noticias MSN.",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "privacy_ai",
+      "title": "Desactivar Búsqueda Web de Bing en Menú Inicio, Noticias MSN y Widgets",
+      "description": "Hace que el buscador del menú Inicio busque exclusivamente archivos y programas locales al instante, sin consultar Bing ni cargar el panel de Widgets/Noticias.",
       "benefits": [
         "El buscador de Windows responde de forma instantánea incluso con internet lento",
-        "Elimina procesos Widgets.exe y sugerencias publicitarias en el Explorador"
+        "Elimina el proceso Widgets.exe (WebView2) que consume hasta 350 MB de RAM"
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["bing", "inicio", "search", "widgets", "noticias", "anuncios", "publicidad"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "bing",
+        "inicio",
+        "search",
+        "widgets",
+        "noticias",
+        "anuncios",
+        "publicidad"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\Explorer", "name": "DisableSearchBoxSuggestions", "value": 1 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Dsh", "name": "AllowNewsAndInterests", "value": 0 },
-        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "name": "SubscribedContent-338389Enabled", "value": 0 }
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\Explorer",
+          "name": "DisableSearchBoxSuggestions",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Dsh",
+          "name": "AllowNewsAndInterests",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-338389Enabled",
+          "value": 0
+        }
       ],
       "undoOps": [
-        { "type": "reg_delete", "hive": "HKCU", "key": "Software\\Policies\\Microsoft\\Windows\\Explorer", "name": "DisableSearchBoxSuggestions" },
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Dsh", "name": "AllowNewsAndInterests" },
-        { "type": "reg_dword", "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "name": "SubscribedContent-338389Enabled", "value": 1 }
-      ]
+        {
+          "type": "reg_delete",
+          "hive": "HKCU",
+          "key": "Software\\Policies\\Microsoft\\Windows\\Explorer",
+          "name": "DisableSearchBoxSuggestions"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Dsh",
+          "name": "AllowNewsAndInterests"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-338389Enabled",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Quitar Bing y Widgets",
+      "summary": "El menú Inicio buscará solo archivos locales sin cargar noticias MSN ni Widgets.exe.",
+      "affects": null
+    },
+    {
+      "id": "debloat_consumer_features",
+      "category": "debloat",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "titus_essential",
+      "title": "Bloquear Descarga Silenciosa de Apps Basura Promocionales (Consumer Features)",
+      "description": "Desactiva 'Experiencias del consumidor de Microsoft', impidiendo que Windows descargue e instale sin permiso Candy Crush, TikTok, Spotify o juegos patrocinados.",
+      "benefits": [
+        "Mantiene el menú Inicio limpio tras cada actualización de Windows",
+        "Evita descargas ocultas en segundo plano"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "bloatware",
+        "consumer features",
+        "candy crush",
+        "apps",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent",
+          "name": "DisableWindowsConsumerFeatures",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SilentInstalledAppsEnabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "OemPreInstalledAppsEnabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "PreInstalledAppsEnabled",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent",
+          "name": "DisableWindowsConsumerFeatures"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SilentInstalledAppsEnabled",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Bloquear apps basura",
+      "summary": "Impide que Windows descargue e instale Candy Crush, TikTok o juegos patrocinados.",
+      "affects": null
+    },
+    {
+      "id": "debloat_edge_background",
+      "category": "debloat",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "privacy_ai",
+      "title": "Impedir que Microsoft Edge Corra Oculto en Segundo Plano (Startup Boost)",
+      "description": "Desactiva el 'Impulso de inicio' y el modo en segundo plano de Microsoft Edge para que al cerrar el navegador se cierren todos los procesos msedge.exe de la RAM.",
+      "benefits": [
+        "Elimina de 8 a 15 procesos msedge.exe que quedan consumiendo RAM sin abrir Edge",
+        "Acelera el inicio de sesión de Windows"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "edge",
+        "msedge",
+        "navegador",
+        "ram",
+        "startup boost",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Edge",
+          "name": "StartupBoostEnabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Edge",
+          "name": "BackgroundModeEnabled",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Edge",
+          "name": "StartupBoostEnabled"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Edge",
+          "name": "BackgroundModeEnabled"
+        }
+      ],
+      "shortTitle": "Cerrar Edge por completo",
+      "summary": "Evita que msedge.exe quede corriendo oculto consumiendo memoria tras cerrarlo.",
+      "affects": null
+    },
+    {
+      "id": "debloat_onedrive_autostart",
+      "category": "debloat",
+      "subcategory": "IA, Copilot y Bloatware",
+      "pack": "privacy_ai",
+      "title": "Desactivar Sincronización Forzada y Arranque Automático de OneDrive",
+      "description": "Desactiva por directiva la sincronización de archivos de OneDrive en segundo plano y elimina su arranque automático al encender el PC.",
+      "benefits": [
+        "Evita que OneDrive secuestre las carpetas de Escritorio y Documentos",
+        "Libera ancho de banda de subida y recursos en el arranque"
+      ],
+      "riskLevel": "medium",
+      "riskWarning": "Si utilizas Microsoft OneDrive a diario para sincronizar tus documentos en la nube, no apliques este ajuste.",
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "onedrive",
+        "nube",
+        "sincronización",
+        "inicio",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\OneDrive",
+          "name": "DisableFileSyncNGSC",
+          "value": 1
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+          "name": "OneDrive"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\OneDrive",
+          "name": "DisableFileSyncNGSC"
+        }
+      ],
+      "shortTitle": "Quitar arranque de OneDrive",
+      "summary": "Desactiva la sincronización obligatoria en segundo plano y el inicio con Windows.",
+      "affects": "No aplicar si guardas tus archivos principales en la nube de OneDrive."
     },
     {
       "id": "debloat_win11_classic_context_menu",
       "category": "debloat",
-      "subcategory": "Interfaz y Bloatware Visual",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
       "title": "Restaurar Menú Contextual Completo Clásico en Windows 11",
       "description": "Elimina la necesidad de pulsar 'Mostrar más opciones' al hacer clic derecho en Windows 11, mostrando todas las opciones de 7-Zip, WinRAR y VS Code al instante.",
       "benefits": [
@@ -287,21 +2587,428 @@
       ],
       "riskLevel": "low",
       "riskWarning": null,
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win11"],
-      "tags": ["win11", "menú contextual", "clic derecho", "explorador"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win11"
+      ],
+      "tags": [
+        "win11",
+        "menú contextual",
+        "clic derecho",
+        "explorador",
+        "titus"
+      ],
       "applyOps": [
-        { "type": "reg_sz", "hive": "HKCU", "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32", "name": "", "value": "" }
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32",
+          "name": "",
+          "value": ""
+        }
       ],
       "undoOps": [
-        { "type": "reg_delete_tree", "hive": "HKCU", "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" }
-      ]
+        {
+          "type": "reg_delete_tree",
+          "hive": "HKCU",
+          "key": "Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}"
+        }
+      ],
+      "shortTitle": "Menú clásico en Win 11",
+      "summary": "Restaura el menú contextual completo de clic derecho sin pulsar 'Mostrar más opciones'.",
+      "affects": null
+    },
+    {
+      "id": "debloat_show_file_extensions",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
+      "title": "Mostrar Siempre Extensiones de Archivo (.exe, .bat, .zip) en el Explorador",
+      "description": "Habilita la visualización de extensiones reales de todos los archivos (HideFileExt = 0). Indispensable para usuarios técnicos y para detectar ejecutables disfrazados.",
+      "benefits": [
+        "Previene engaños de malware oculto con doble extensión (ej. documento.pdf.exe)",
+        "Facilita cambiar extensiones y gestionar scripts"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "extensiones",
+        "explorador",
+        "seguridad",
+        "archivos",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "HideFileExt",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "HideFileExt",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Ver extensiones de archivo",
+      "summary": "Muestra siempre .exe, .bat o .zip para identificar el tipo real de cada archivo.",
+      "affects": null
+    },
+    {
+      "id": "debloat_explorer_this_pc",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
+      "title": "Abrir Explorador en 'Este Equipo' y Limpiar Iconos de Barra de Tareas",
+      "description": "Configura el Explorador de Archivos para abrir directamente en 'Este Equipo' (discos duros) en lugar de 'Inicio/Acceso Rápido' y oculta el botón de Vista de Tareas.",
+      "benefits": [
+        "Acceso directo e instantáneo a tus unidades C: y D: al pulsar Win+E",
+        "Barra de tareas más limpia y despejada"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "explorador",
+        "este equipo",
+        "barra de tareas",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "LaunchTo",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "ShowTaskViewButton",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "LaunchTo",
+          "value": 2
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+          "name": "ShowTaskViewButton",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Abrir en 'Este Equipo'",
+      "summary": "Abre el Explorador en tus discos duros y oculta botones no usados en la barra de tareas.",
+      "affects": null
+    },
+    {
+      "id": "debloat_sticky_keys_off",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "ceito_gaming",
+      "title": "Desactivar Aviso Emergente de Teclas Especiales (Sticky Keys al Pulsar 5 Veces Shift)",
+      "description": "Desactiva el atajo de accesibilidad que muestra una ventana emergente con pitido y minimiza tu juego cuando presionas la tecla Shift 5 veces seguidas.",
+      "benefits": [
+        "Evita que Windows te saque al escritorio en mitad de una partida",
+        "Imprescindible para cualquier PC gaming"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "sticky keys",
+        "shift",
+        "teclas especiales",
+        "gaming",
+        "ceito",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\StickyKeys",
+          "name": "Flags",
+          "value": "506"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\ToggleKeys",
+          "name": "Flags",
+          "value": "58"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\Keyboard Response",
+          "name": "Flags",
+          "value": "122"
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\StickyKeys",
+          "name": "Flags",
+          "value": "510"
+        }
+      ],
+      "shortTitle": "Quitar aviso Sticky Keys",
+      "summary": "Desactiva la ventana emergente que interrumpe juegos al presionar 5 veces Shift.",
+      "affects": null
+    },
+    {
+      "id": "debloat_lockscreen_ads_off",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
+      "title": "Eliminar Anuncios en Pantalla de Bloqueo y Avisos 'Termina de Configurar tu PC'",
+      "description": "Desactiva los textos publicitarios en la pantalla de bloqueo y bloquea las pantallas de bienvenida a pantalla completa que piden suscribirse a Microsoft 365.",
+      "benefits": [
+        "Inicio de sesión limpio sin interrupciones a pantalla completa",
+        "Elimina banners promocionales dentro de la app de Configuración"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "pantalla de bloqueo",
+        "anuncios",
+        "sugerencias",
+        "microsoft 365",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-338393Enabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-353694Enabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-310093Enabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\UserProfileEngagement",
+          "name": "ScoobeSystemSettingEnabled",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-338393Enabled",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\UserProfileEngagement",
+          "name": "ScoobeSystemSettingEnabled",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Eliminar anuncios y avisos",
+      "summary": "Quita sugerencias publicitarias en la pantalla de bloqueo y ventanas de Microsoft 365.",
+      "affects": null
+    },
+    {
+      "id": "debloat_wupdate_no_drivers",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
+      "title": "Bloquear Reemplazo de Drivers de GPU por Windows Update y Reinicios Forzados",
+      "description": "Impide que Windows Update sobrescriba tus drivers oficiales de NVIDIA/AMD con versiones antiguas genéricas y prohíbe reinicios automáticos con sesión iniciada.",
+      "benefits": [
+        "Protege la instalación limpia de tus drivers gráficos",
+        "Evita perder documentos abiertos por reinicios nocturnos no autorizados"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "windows update",
+        "drivers",
+        "gpu",
+        "reinicio",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate",
+          "name": "ExcludeWUDriversInQualityUpdate",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+          "name": "NoAutoRebootWithLoggedOnUsers",
+          "value": 1
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate",
+          "name": "ExcludeWUDriversInQualityUpdate"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+          "name": "NoAutoRebootWithLoggedOnUsers"
+        }
+      ],
+      "shortTitle": "Proteger drivers de GPU",
+      "summary": "Impide que Windows Update reemplace tus drivers de vídeo y evita reinicios forzados.",
+      "affects": null
+    },
+    {
+      "id": "debloat_delivery_opt_p2p",
+      "category": "debloat",
+      "subcategory": "Interfaz, Explorador y Update",
+      "pack": "titus_essential",
+      "title": "Desactivar Subida P2P de Actualizaciones (Delivery Optimization)",
+      "description": "Configura DODownloadMode=0 para impedir que tu PC utilice tu conexión a internet para subir partes de actualizaciones de Windows a otros equipos en la red.",
+      "benefits": [
+        "Elimina picos de ping causados por subidas de Delivery Optimization en segundo plano",
+        "Protege tu ancho de banda mientras juegas o haces videollamadas"
+      ],
+      "riskLevel": "low",
+      "riskWarning": null,
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "delivery optimization",
+        "p2p",
+        "windows update",
+        "ping",
+        "red",
+        "titus"
+      ],
+      "applyOps": [
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization",
+          "name": "DODownloadMode",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Config",
+          "name": "DODownloadMode",
+          "value": 0
+        }
+      ],
+      "undoOps": [
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization",
+          "name": "DODownloadMode"
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Config",
+          "name": "DODownloadMode",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Quitar subida P2P de updates",
+      "summary": "Evita que Windows use tu internet para subir actualizaciones a otros equipos del mundo.",
+      "affects": null
     },
     {
       "id": "debloat_xbox_gamedvr_capture",
       "category": "debloat",
       "subcategory": "Gaming y Servicios",
-      "title": "Desactivar Grabación en Segundo Plano GameDVR y Superposición Xbox",
+      "pack": "ceito_gaming",
+      "title": "Desactivar Grabación Continua en Segundo Plano GameDVR",
       "description": "Desactiva la grabación continua de vídeo de Xbox GameDVR que codifica vídeo en segundo plano mientras juegas.",
       "benefits": [
         "Mejora los FPS mínimos (1% Lows) y reduce la latencia de entrada (Input Lag)",
@@ -309,22 +3016,64 @@
       ],
       "riskLevel": "medium",
       "riskWarning": "Desactiva los clips de vídeo con Win+Alt+G en Xbox Game Bar. Los juegos de Xbox Game Pass seguirán funcionando con normalidad.",
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["xbox", "gamedvr", "game bar", "fps", "input lag", "gaming"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "xbox",
+        "gamedvr",
+        "game bar",
+        "fps",
+        "input lag",
+        "gaming",
+        "ceito",
+        "titus"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKCU", "key": "System\\GameConfigStore", "name": "GameDVR_Enabled", "value": 0 },
-        { "type": "reg_dword", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR", "name": "AllowGameDVR", "value": 0 }
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_Enabled",
+          "value": 0
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR",
+          "name": "AllowGameDVR",
+          "value": 0
+        }
       ],
       "undoOps": [
-        { "type": "reg_dword", "hive": "HKCU", "key": "System\\GameConfigStore", "name": "GameDVR_Enabled", "value": 1 },
-        { "type": "reg_delete", "hive": "HKLM", "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR", "name": "AllowGameDVR" }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "System\\GameConfigStore",
+          "name": "GameDVR_Enabled",
+          "value": 1
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR",
+          "name": "AllowGameDVR"
+        }
+      ],
+      "shortTitle": "Desactivar GameDVR",
+      "summary": "Detiene la grabación continua de vídeo en segundo plano aumentando tus FPS mínimos.",
+      "affects": "Desactiva clips con Win+Alt+G. Game Pass sigue funcionando normal."
     },
     {
       "id": "advanced_disable_vbs_hvci",
       "category": "optimization",
       "subcategory": "Avanzado / Kernel",
+      "pack": "advanced_kernel",
       "title": "Desactivar Aislamiento de Núcleo (HVCI / Integridad de Memoria) para Máximo Rendimiento",
       "description": "Desactiva la Seguridad Basada en Virtualización (VBS) sobre hipervisor que añade sobrecarga en cada llamada a memoria del kernel.",
       "benefits": [
@@ -333,15 +3082,43 @@
       ],
       "riskLevel": "high",
       "riskWarning": "Reduce una capa de seguridad de virtualización del kernel (Integridad de memoria). Recomendado solo para usuarios experimentados. Requiere reiniciar.",
-      "deviceScope": ["laptop", "desktop"],
-      "osCompatibility": ["win10", "win11"],
-      "tags": ["vbs", "hvci", "integridad de memoria", "kernel", "fps", "avanzado"],
+      "deviceScope": [
+        "laptop",
+        "desktop"
+      ],
+      "osCompatibility": [
+        "win10",
+        "win11"
+      ],
+      "tags": [
+        "vbs",
+        "hvci",
+        "integridad de memoria",
+        "kernel",
+        "fps",
+        "avanzado"
+      ],
       "applyOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity", "name": "Enabled", "value": 0 }
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+          "name": "Enabled",
+          "value": 0
+        }
       ],
       "undoOps": [
-        { "type": "reg_dword", "hive": "HKLM", "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity", "name": "Enabled", "value": 1 }
-      ]
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+          "name": "Enabled",
+          "value": 1
+        }
+      ],
+      "shortTitle": "Desactivar aislamiento HVCI",
+      "summary": "Desactiva la virtualización VBS ganando entre 5% y 12% de rendimiento en CPUs gaming.",
+      "affects": "Reduce aislamiento de memoria del kernel. Requiere reiniciar."
     }
   ]
 }
