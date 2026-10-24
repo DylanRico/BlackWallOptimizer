@@ -2780,7 +2780,7 @@ namespace Blackwall
             catch { }
             return _versionInfo != null && _versionInfo.ContainsKey("manifestUrl")
                 ? GetStr(_versionInfo, "manifestUrl")
-                : "https://raw.githubusercontent.com/dylan/Blackwall/main/catalogs/version.json";
+                : "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/version.json";
         }
 
         private void SaveConfiguredOtaManifestUrl(string url)

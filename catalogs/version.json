@@ -1,17 +1,17 @@
 {
     "appVersion": "1.2.0",
     "releaseDate": "2026-10-23T16:45:00Z",
-    "manifestUrl": "https://raw.githubusercontent.com/dylan/Blackwall/main/catalogs/version.json",
+    "manifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/version.json",
     "mandatory": false,
     "binary": {
-        "downloadUrl": "https://github.com/dylan/Blackwall/releases/latest/download/Blackwall.exe",
-        "sha256": ""
+        "downloadUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/Blackwall.exe",
+        "sha256": "78de4f784483ee8a79218105dc373c44ded04b3c8a58e2285be8063cba35f81c"
     },
     "catalogs": {
         "tweaksVersion": "2.0.0",
-        "tweaksUrl": "https://raw.githubusercontent.com/dylan/Blackwall/main/catalogs/tweaks.json",
+        "tweaksUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/tweaks.json",
         "appsVersion": "2.1.0",
-        "appsUrl": "https://raw.githubusercontent.com/dylan/Blackwall/main/catalogs/apps.json"
+        "appsUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/apps.json"
     },
     "changelog": [
         "BLACKWALL PROTOCOL v1.2.0 // Native C# ICE Architecture sin dependencias.",
