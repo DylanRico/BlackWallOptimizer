@@ -20,6 +20,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -68,6 +69,125 @@ namespace Blackwall
         }
     }
 
+    public class SmoothScrollViewer : ScrollViewer
+    {
+        private bool _reduceMotion;
+        public bool ReduceMotion
+        {
+            get { return _reduceMotion; }
+            set { _reduceMotion = value; if (value) StopSmoothScroll(); }
+        }
+        private double _targetOffset;
+        private bool _scrolling;
+        private static readonly DependencyProperty AnimatedOffsetProperty = DependencyProperty.Register(
+            "AnimatedOffset", typeof(double), typeof(SmoothScrollViewer),
+            new PropertyMetadata(0.0, (d, e) => ((SmoothScrollViewer)d).ScrollToVerticalOffset((double)e.NewValue)));
+
+        protected override void OnMouseWheel(MouseWheelEventArgs e)
+        {
+            if (e.Handled) return;
+            if (ReduceMotion || !SystemParameters.ClientAreaAnimation || ScrollableHeight <= 0 || Keyboard.Modifiers != ModifierKeys.None)
+            {
+                StopSmoothScroll();
+                base.OnMouseWheel(e);
+                return;
+            }
+            double step = SystemParameters.WheelScrollLines < 0 ? ViewportHeight : SystemParameters.WheelScrollLines * 16.0;
+            double from = VerticalOffset;
+            double origin = _scrolling && e.Delta * (_targetOffset - from) <= 0 ? _targetOffset : from;
+            _targetOffset = Math.Max(0, Math.Min(ScrollableHeight, origin - e.Delta / 120.0 * step));
+            DoubleAnimation motion = new DoubleAnimation(from, _targetOffset, TimeSpan.FromMilliseconds(260))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            motion.Completed += (s, args) => _scrolling = false;
+            _scrolling = true;
+            BeginAnimation(AnimatedOffsetProperty, motion);
+            e.Handled = true;
+        }
+
+        private void StopSmoothScroll()
+        {
+            double offset = VerticalOffset;
+            _scrolling = false;
+            SetValue(AnimatedOffsetProperty, offset);
+            BeginAnimation(AnimatedOffsetProperty, null);
+        }
+
+        protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+        {
+            StopSmoothScroll();
+            base.OnPreviewMouseDown(e);
+        }
+
+        protected override void OnPreviewKeyDown(KeyEventArgs e)
+        {
+            StopSmoothScroll();
+            base.OnPreviewKeyDown(e);
+        }
+
+        protected override void OnContentChanged(object oldContent, object newContent)
+        {
+            StopSmoothScroll();
+            base.OnContentChanged(oldContent, newContent);
+        }
+    }
+
+    // A small isolated drawing surface keeps the moving circuit away from text/layout.
+    public class EnergyTrace : FrameworkElement
+    {
+        private readonly DispatcherTimer _timer;
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        public bool Vertical { get; set; }
+        public bool Running { get { return _timer.IsEnabled; } }
+        public EnergyTrace()
+        {
+            IsHitTestVisible = false;
+            ClipToBounds = true;
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            _timer.Tick += (s, e) => InvalidateVisual();
+            Unloaded += (s, e) => SetRunning(false);
+        }
+        public void SetRunning(bool running)
+        {
+            if (running) _timer.Start(); else _timer.Stop();
+            InvalidateVisual();
+        }
+        protected override void OnRender(DrawingContext drawing)
+        {
+            base.OnRender(drawing);
+            double length = Vertical ? ActualHeight : ActualWidth;
+            double cross = Vertical ? ActualWidth : ActualHeight;
+            if (length <= 0 || cross <= 0) return;
+            double time = Running ? _clock.Elapsed.TotalSeconds : 0;
+            var basePen = new Pen(new SolidColorBrush(Color.FromArgb(100, 143, 24, 40)), 1);
+            var hotPen = new Pen(new SolidColorBrush(Color.FromArgb(210, 239, 104, 120)), 1.4);
+            Func<double, double, Point> point = (along, across) => Vertical ? new Point(across, along) : new Point(along, across);
+            Point previous = point(0, cross / 2);
+            for (int i = 1; i <= 36; i++)
+            {
+                double along = length * i / 36;
+                double offset = i % 4 == 0 ? cross * 0.26 : i % 4 == 1 ? -cross * 0.26 : 0;
+                Point next = point(along, cross / 2 + offset);
+                drawing.DrawLine(basePen, previous, next);
+                previous = next;
+            }
+            if (!Running) return;
+            for (int charge = 0; charge < 3; charge++)
+            {
+                double head = ((time * 0.13 + charge / 3.0) % 1) * length;
+                for (int tail = 0; tail < 8; tail++)
+                {
+                    double position = head - tail * 4;
+                    if (position < 0) continue;
+                    var ink = new SolidColorBrush(Color.FromArgb((byte)(190 - tail * 22), 255, 91, 121));
+                    drawing.DrawEllipse(ink, null, point(position, cross / 2 + Math.Sin(position / length * Math.PI * 12) * cross * 0.18), tail == 0 ? 2.4 : 1.4, tail == 0 ? 2.4 : 1.4);
+                }
+                drawing.DrawLine(hotPen, point(Math.Max(0, head - 14), cross / 2), point(head, cross / 2));
+            }
+        }
+    }
+
     public class MainWindow : Window
     {
         // Paleta dinámica (Modo Cyberpunk Muro Negro / Modo Arasaka Claro)
@@ -91,6 +211,8 @@ namespace Blackwall
 
         // Estado de la aplicación
         private string _activeTab = "hardware";
+        private string _lastRenderedTab;
+        private bool _lastRenderedReady;
         private string _optDeviceScope = "auto";
         private string _optRiskScope = "all";
         private string _appCategoryScope = "Todas";
@@ -131,11 +253,51 @@ namespace Blackwall
         private Dictionary<string, Button> _navButtons = new Dictionary<string, Button>();
         private DispatcherTimer _scriptMonitorTimer;
         private JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        private readonly Dictionary<string, Task> _readTasks = new Dictionary<string, Task>();
+        private readonly HashSet<string> _loadedModules = new HashSet<string>();
+        private readonly Dictionary<string, string> _readErrors = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _readLabels = new Dictionary<string, string>();
+        private readonly Dictionary<string, int> _readProgress = new Dictionary<string, int>();
+        private Border _activityPanel;
+        private TextBlock _activityTitle;
+        private TextBlock _activityDetail;
+        private ProgressBar _activityProgress;
+        private Button _activityRetry;
+        private Button _activityDismiss;
 
-        public MainWindow()
+        private readonly string _preferencesPath;
+        private bool _sidebarCollapsed;
+        private bool _reduceMotion;
+        private ColumnDefinition _sidebarColumn;
+        private Border _sidebarBorder;
+        private Button _sidebarToggle;
+        private Button _motionToggle;
+        private readonly List<FrameworkElement> _expandedSidebarElements = new List<FrameworkElement>();
+        private readonly List<SmoothScrollViewer> _scrollViewers = new List<SmoothScrollViewer>();
+        private EnergyTrace _headerEnergy;
+        private EnergyTrace _sidebarEnergy;
+        private readonly List<FrameworkElement> _motionEntrances = new List<FrameworkElement>();
+        private readonly HashSet<FrameworkElement> _revealedCards = new HashSet<FrameworkElement>();
+        private List<FrameworkElement> _pageMotionCards = new List<FrameworkElement>();
+        private FrameworkElement _motionPage;
+        private readonly HashSet<Button> _motionButtons = new HashSet<Button>();
+        private System.Windows.Media.Effects.DropShadowEffect _logoHalo;
+        private static readonly DependencyProperty MotionWiredProperty = DependencyProperty.RegisterAttached("MotionWired", typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+        private static readonly DependencyProperty SidebarWidthProperty = DependencyProperty.Register("SidebarWidth", typeof(double), typeof(MainWindow), new PropertyMetadata(248.0, (d, e) =>
         {
+            var window = (MainWindow)d;
+            if (window._sidebarColumn != null) window._sidebarColumn.Width = new GridLength((double)e.NewValue);
+        }));
+        private bool MotionAllowed { get { return !_reduceMotion && SystemParameters.ClientAreaAnimation; } }
+
+        public MainWindow() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Blackwall", "ui-preferences.json")) { }
+
+        public MainWindow(string preferencesPath)
+        {
+            _preferencesPath = preferencesPath;
+            LoadUiPreferences();
             bool isAdmin = IsAdministrator();
-            Title = "Blackwall v1.3 // ICE Protocol — Suite Nativa Win32 (Cero PowerShell)" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
+            Title = "Blackwall — Muro Negro" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
             Width = 1400;
             Height = 880;
             MinWidth = 1080;
@@ -156,6 +318,7 @@ namespace Blackwall
                 UseAeroCaptionButtons = false
             };
             WindowChrome.SetWindowChrome(this, chrome);
+            SourceInitialized += (s, e) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WindowBoundsHook);
 
             this.StateChanged += (s, e) =>
             {
@@ -177,6 +340,20 @@ namespace Blackwall
             LoadEmbeddedCatalogs();
             UpdateThemeBrushes();
             BuildShellUI();
+            InitializeActivityPanel();
+            Activated += (s, e) => UpdateAmbientMotion();
+            Deactivated += (s, e) => UpdateAmbientMotion();
+            StateChanged += (s, e) => UpdateAmbientMotion();
+            SystemParameters.StaticPropertyChanged += OnSystemMotionChanged;
+            Closed += (s, e) =>
+            {
+                SystemParameters.StaticPropertyChanged -= OnSystemMotionChanged;
+                _scriptMonitorTimer.Stop();
+                if (_logoHalo != null) _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, null);
+                if (_headerEnergy != null) _headerEnergy.SetRunning(false);
+                if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(false);
+                StopEntrances();
+            };
 
             this.PreviewKeyDown += (s, e) =>
             {
@@ -196,25 +373,305 @@ namespace Blackwall
             {
                 TriggerLogoGlitch();
                 RenderCurrentTab();
+                await Dispatcher.Yield(DispatcherPriority.Background);
                 await RefreshHardwareNativeAsync();
-                await Task.WhenAll(
-                    RefreshTweaksStateNativeAsync(),
-                    RefreshInstalledAppsNativeAsync(),
-                    RefreshLiveScriptsNativeAsync(),
-                    RefreshRestorePointsNativeAsync(),
-                    CheckRemoteOtaAsync(true)
-                );
             };
 
             _scriptMonitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             _scriptMonitorTimer.Tick += async (s, e) =>
             {
-                if (_activeTab == "monitor")
+                if (_activeTab == "monitor" && !_readTasks.ContainsKey("monitor") && !_readErrors.ContainsKey("monitor"))
                 {
                     await RefreshLiveScriptsNativeAsync();
                 }
             };
             _scriptMonitorTimer.Start();
+        }
+
+        private void LoadUiPreferences()
+        {
+            try
+            {
+                if (!File.Exists(_preferencesPath)) return;
+                var settings = _json.Deserialize<Dictionary<string, object>>(File.ReadAllText(_preferencesPath));
+                _sidebarCollapsed = GetBool(settings, "sidebarCollapsed");
+                _reduceMotion = GetBool(settings, "reduceMotion");
+                if (settings.ContainsKey("dark")) _isDark = GetBool(settings, "dark");
+            }
+            catch { _consoleLogs.Add("[INTERFAZ] Preferencias no válidas; se usarán los valores iniciales."); }
+        }
+
+        private void SaveUiPreferences()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath));
+                string temp = _preferencesPath + ".tmp";
+                File.WriteAllText(temp, _json.Serialize(new { sidebarCollapsed = _sidebarCollapsed, reduceMotion = _reduceMotion, dark = _isDark }));
+                if (File.Exists(_preferencesPath)) File.Replace(temp, _preferencesPath, null);
+                else File.Move(temp, _preferencesPath);
+            }
+            catch (Exception ex) { AppendLog("No se pudo guardar la preferencia visual: " + ex.Message, "INTERFAZ"); }
+        }
+
+        private void OnSystemMotionChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "ClientAreaAnimation") Dispatcher.BeginInvoke(new Action(UpdateMotionPreference));
+        }
+
+        private SmoothScrollViewer CreateSmoothScroller()
+        {
+            var viewer = new SmoothScrollViewer { ReduceMotion = !MotionAllowed };
+            _scrollViewers.Add(viewer);
+            return viewer;
+        }
+
+        private void UpdateMotionPreference()
+        {
+            foreach (var viewer in _scrollViewers) viewer.ReduceMotion = !MotionAllowed;
+            if (_motionToggle != null)
+            {
+                _motionToggle.Content = _sidebarCollapsed ? (_reduceMotion ? "○" : "≈") : (_reduceMotion ? "Movimiento reducido" : "Animaciones activas");
+                _motionToggle.ToolTip = _reduceMotion ? "Activar animaciones" : "Reducir movimiento";
+                System.Windows.Automation.AutomationProperties.SetName(_motionToggle, Convert.ToString(_motionToggle.ToolTip));
+            }
+            if (!MotionAllowed && _mainScroll != null)
+            {
+                StopEntrances();
+                BeginAnimation(SidebarWidthProperty, null);
+                _sidebarColumn.Width = new GridLength(_sidebarCollapsed ? 72 : 248);
+                _mainScroll.BeginAnimation(OpacityProperty, null);
+                _mainScroll.RenderTransform = Transform.Identity;
+                FrameworkElement page = _mainScroll.Content as FrameworkElement;
+                if (page != null) { page.BeginAnimation(OpacityProperty, null); page.RenderTransform = Transform.Identity; }
+                _logoBox.BeginAnimation(OpacityProperty, null);
+                foreach (var button in _motionButtons)
+                {
+                    var frame = button.Template.FindName("Frame", button) as Border;
+                    var sheen = button.Template.FindName("Sheen", button) as Border;
+                    if (frame != null) frame.RenderTransform = Transform.Identity;
+                    if (sheen != null) sheen.Background = null;
+                }
+            }
+            UpdateAmbientMotion();
+            UpdateActivityPanel();
+        }
+
+        private void UpdateAmbientMotion()
+        {
+            bool running = MotionAllowed && IsActive && WindowState != WindowState.Minimized;
+            if (_headerEnergy != null) _headerEnergy.SetRunning(running);
+            if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(running);
+            if (_logoHalo != null)
+            {
+                _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, null);
+                if (running) _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, new DoubleAnimation(3, 14, TimeSpan.FromSeconds(2)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
+            }
+        }
+
+        private void AnimateEntrance(FrameworkElement element, double distance, int milliseconds)
+        {
+            if (!MotionAllowed) return;
+            var translate = new TranslateTransform();
+            element.RenderTransform = translate;
+            translate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(distance, 0, TimeSpan.FromMilliseconds(milliseconds)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop });
+            element.BeginAnimation(OpacityProperty, new DoubleAnimation(0.65, 1, TimeSpan.FromMilliseconds(milliseconds)) { FillBehavior = FillBehavior.Stop });
+        }
+
+        private void StopEntrances()
+        {
+            foreach (var element in _motionEntrances)
+            {
+                element.BeginAnimation(OpacityProperty, null);
+                TransformGroup group = element.RenderTransform as TransformGroup;
+                if (group != null) foreach (var transform in group.Children)
+                {
+                    var translate = transform as TranslateTransform;
+                    var scale = transform as ScaleTransform;
+                    if (translate != null) translate.BeginAnimation(TranslateTransform.YProperty, null);
+                    if (scale != null) scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                }
+                element.RenderTransform = Transform.Identity;
+            }
+            _motionEntrances.Clear();
+            _revealedCards.Clear();
+        }
+
+        private IEnumerable<FrameworkElement> MotionCards(DependencyObject node)
+        {
+            FrameworkElement element = node as FrameworkElement;
+            if (element != null && element.Uid == "motion-card") { yield return element; yield break; }
+            foreach (object child in LogicalTreeHelper.GetChildren(node))
+            {
+                DependencyObject dependency = child as DependencyObject;
+                if (dependency != null) foreach (var card in MotionCards(dependency)) yield return card;
+            }
+        }
+
+        private void AnimatePage(FrameworkElement page)
+        {
+            if (_mainScroll.Content != page) return;
+            StopEntrances();
+            if (!MotionAllowed) return;
+            page.UpdateLayout();
+            _motionPage = page;
+            _pageMotionCards = MotionCards(page).ToList();
+            RevealVisibleCards(page);
+        }
+
+        private void RevealVisibleCards(FrameworkElement page)
+        {
+            if (!MotionAllowed || page != _mainScroll.Content || page != _motionPage) return;
+            int index = 0;
+            foreach (var card in _pageMotionCards)
+            {
+                if (_revealedCards.Contains(card) || card.ActualHeight <= 0) continue;
+                Point position;
+                try { position = card.TransformToAncestor(_mainScroll).Transform(new Point(0, 0)); }
+                catch (InvalidOperationException) { continue; }
+                if (position.Y + card.ActualHeight <= 0 || position.Y >= _mainScroll.ActualHeight) continue;
+                _revealedCards.Add(card);
+                double delay = Math.Min(index++ * 38, 380);
+                var translate = new TranslateTransform();
+                var scale = new ScaleTransform(1, 1);
+                var transforms = new TransformGroup();
+                transforms.Children.Add(scale);
+                transforms.Children.Add(translate);
+                card.RenderTransformOrigin = new Point(0.5, 0.5);
+                card.RenderTransform = transforms;
+                var slide = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+                slide.KeyFrames.Add(new LinearDoubleKeyFrame(30, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                slide.KeyFrames.Add(new LinearDoubleKeyFrame(30, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
+                slide.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 460)), new BackEase { Amplitude = 0.18, EasingMode = EasingMode.EaseOut }));
+                translate.BeginAnimation(TranslateTransform.YProperty, slide);
+                var reveal = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
+                reveal.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 300)), new CubicEase { EasingMode = EasingMode.EaseOut }));
+                card.BeginAnimation(OpacityProperty, reveal);
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.975, 1, TimeSpan.FromMilliseconds(delay + 460)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                _motionEntrances.Add(card);
+            }
+        }
+
+        private void OnMotionButtonLoaded(object sender, RoutedEventArgs args)
+        {
+            var button = sender as Button;
+            if (button == null) return;
+            _motionButtons.Add(button);
+            if ((bool)button.GetValue(MotionWiredProperty)) return;
+            button.SetValue(MotionWiredProperty, true);
+            button.Unloaded += (s, e) => _motionButtons.Remove(button);
+            button.MouseEnter += (s, e) => PlayButtonSheen(button);
+            button.GotKeyboardFocus += (s, e) => PlayButtonSheen(button);
+            button.LostKeyboardFocus += (s, e) =>
+            {
+                var frame = button.Template.FindName("Frame", button) as Border;
+                if (frame != null) frame.RenderTransform = Transform.Identity;
+            };
+            button.MouseLeave += (s, e) =>
+            {
+                var frame = button.Template.FindName("Frame", button) as Border;
+                var move = frame == null ? null : frame.RenderTransform as TranslateTransform;
+                if (move != null) move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(move.Y, 0, TimeSpan.FromMilliseconds(MotionAllowed ? 180 : 0)));
+            };
+        }
+
+        private void PlayButtonSheen(Button button)
+        {
+            if (!MotionAllowed || !button.IsEnabled) return;
+            var sheen = button.Template.FindName("Sheen", button) as Border;
+            var frame = button.Template.FindName("Frame", button) as Border;
+            if (sheen == null || frame == null) return;
+            var brush = new LinearGradientBrush();
+            brush.StartPoint = new Point(0, 0);
+            brush.EndPoint = new Point(1, 0.4);
+            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.15));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(100, 255, 150, 174), 0.5));
+            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.85));
+            var sweep = new TranslateTransform();
+            brush.RelativeTransform = sweep;
+            sheen.Background = brush;
+            sweep.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-1.3, 1.3, TimeSpan.FromMilliseconds(650)));
+            var lift = frame.RenderTransform as TranslateTransform;
+            if (lift == null) { lift = new TranslateTransform(); frame.RenderTransform = lift; }
+            lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(lift.Y, -2, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        }
+
+        private void ToggleSidebar()
+        {
+            double from = _sidebarColumn.Width.Value;
+            _sidebarCollapsed = !_sidebarCollapsed;
+            ApplySidebarState();
+            SaveUiPreferences();
+            double target = _sidebarCollapsed ? 72 : 248;
+            SetValue(SidebarWidthProperty, target);
+            if (MotionAllowed)
+                BeginAnimation(SidebarWidthProperty, new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(420)) { EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop });
+        }
+
+        private void ApplySidebarState()
+        {
+            _sidebarColumn.Width = new GridLength(_sidebarCollapsed ? 72 : 248);
+            _sidebarBorder.Padding = new Thickness(_sidebarCollapsed ? 8 : 14, 16, _sidebarCollapsed ? 8 : 14, 16);
+            foreach (var element in _expandedSidebarElements) element.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            foreach (var button in _navButtons.Values)
+            {
+                var content = (Grid)button.Content;
+                for (int i = 1; i < content.Children.Count; i++) content.Children[i].Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+                content.ColumnDefinitions[1].Width = _sidebarCollapsed ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+                content.ColumnDefinitions[2].Width = new GridLength(_sidebarCollapsed ? 0 : 12);
+            }
+            _sidebarToggle.Content = _sidebarCollapsed ? "☰" : "☰    Contraer menú";
+            _sidebarToggle.ToolTip = _sidebarCollapsed ? "Expandir menú" : "Contraer menú";
+            System.Windows.Automation.AutomationProperties.SetName(_sidebarToggle, Convert.ToString(_sidebarToggle.ToolTip));
+            UpdateMotionPreference();
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativePoint { public int X, Y; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeRect { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MinMaxInfo
+        {
+            public NativePoint Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MonitorInfo
+        {
+            public int Size;
+            public NativeRect Monitor, Work;
+            public int Flags;
+        }
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+        private static Rect CalculateMaximizedBounds(Rect monitor, Rect work)
+        {
+            return new Rect(work.Left - monitor.Left, work.Top - monitor.Top, work.Width, work.Height);
+        }
+
+        private IntPtr WindowBoundsHook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_GETMINMAXINFO = 0x0024;
+            if (message != WM_GETMINMAXINFO) return IntPtr.Zero;
+            MonitorInfo monitor = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
+            if (!GetMonitorInfo(MonitorFromWindow(hwnd, 2), ref monitor)) return IntPtr.Zero;
+            Rect bounds = CalculateMaximizedBounds(
+                new Rect(monitor.Monitor.Left, monitor.Monitor.Top, monitor.Monitor.Right - monitor.Monitor.Left, monitor.Monitor.Bottom - monitor.Monitor.Top),
+                new Rect(monitor.Work.Left, monitor.Work.Top, monitor.Work.Right - monitor.Work.Left, monitor.Work.Bottom - monitor.Work.Top));
+            MinMaxInfo info = (MinMaxInfo)Marshal.PtrToStructure(lParam, typeof(MinMaxInfo));
+            info.MaxPosition.X = (int)bounds.X;
+            info.MaxPosition.Y = (int)bounds.Y;
+            info.MaxSize.X = (int)bounds.Width;
+            info.MaxSize.Y = (int)bounds.Height;
+            Marshal.StructureToPtr(info, lParam, false);
+            handled = true;
+            return IntPtr.Zero;
         }
 
         private bool IsAdministrator()
@@ -255,20 +712,22 @@ namespace Blackwall
         {
             try
             {
-                if (resourceName == "tweaks.json" || resourceName == "apps.json")
-                {
-                    string otaCacheFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs", resourceName);
-                    if (File.Exists(otaCacheFile))
-                        return File.ReadAllText(otaCacheFile, Encoding.UTF8);
-                }
-
                 Assembly asm = Assembly.GetExecutingAssembly();
                 using (Stream st = asm.GetManifestResourceStream(resourceName))
                 {
                     if (st != null)
                     {
                         using (StreamReader sr = new StreamReader(st, Encoding.UTF8))
-                            return sr.ReadToEnd();
+                        {
+                            string embedded = sr.ReadToEnd();
+                            if (resourceName == "tweaks.json" || resourceName == "apps.json")
+                            {
+                                string cached = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs", resourceName);
+                                try { if (File.Exists(cached)) return SelectCatalog(embedded, File.ReadAllText(cached, Encoding.UTF8)); }
+                                catch (Exception ex) { AppendLog("No se pudo leer el catálogo local: " + ex.Message, "CATÁLOGO"); }
+                            }
+                            return embedded;
+                        }
                     }
                 }
             }
@@ -278,6 +737,22 @@ namespace Blackwall
             if (File.Exists(fullPath))
                 return File.ReadAllText(fullPath, Encoding.UTF8);
             return "";
+        }
+
+        private string SelectCatalog(string embedded, string cached)
+        {
+            try
+            {
+                var bundled = _json.Deserialize<Dictionary<string, object>>(embedded);
+                var local = _json.Deserialize<Dictionary<string, object>>(cached);
+                DateTime bundledDate, localDate;
+                string entries = bundled.ContainsKey("tweaks") ? "tweaks" : "apps";
+                if (!local.ContainsKey(entries) || !(local[entries] is IEnumerable)) return embedded;
+                if (DateTime.TryParse(GetStr(bundled, "lastUpdated"), out bundledDate) && DateTime.TryParse(GetStr(local, "lastUpdated"), out localDate) && localDate > bundledDate) return cached;
+            }
+            catch { }
+            // A stale OTA cache must not replace the newer catalog shipped in this executable.
+            return embedded;
         }
 
         private void LoadEmbeddedCatalogs()
@@ -312,19 +787,157 @@ namespace Blackwall
         // ====================================================================
         // MOTOR NATIVO WMI / REGISTRO / RED EN C# (ULTRARRÁPIDO < 350ms)
         // ====================================================================
-        private async Task RefreshHardwareNativeAsync()
+        private void InitializeActivityPanel()
+        {
+            StackPanel body = new StackPanel();
+            _activityTitle = new TextBlock { Foreground = TextPrimary, FontSize = 14, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+            _activityDetail = new TextBlock { Foreground = TextSecondary, FontSize = 12, Margin = new Thickness(0, 8, 0, 12), TextWrapping = TextWrapping.Wrap, MaxHeight = 100 };
+            _activityProgress = new ProgressBar { Height = 4, Maximum = 100, Foreground = CyberCyanBrush, Background = BgElevated, BorderThickness = new Thickness(0) };
+            StackPanel actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
+            _activityRetry = CreateStyledButton("Intentar de nuevo", true);
+            _activityDismiss = CreateStyledButton("Cerrar", false);
+            _activityDismiss.Margin = new Thickness(8, 0, 0, 0);
+            _activityRetry.Click += async (s, e) =>
+            {
+                string key = Convert.ToString(_activityRetry.Tag);
+                _readErrors.Remove(key);
+                await LoadModuleAsync(key);
+            };
+            _activityDismiss.Click += (s, e) =>
+            {
+                _readErrors.Remove(Convert.ToString(_activityDismiss.Tag));
+                UpdateActivityPanel();
+            };
+            actions.Children.Add(_activityRetry);
+            actions.Children.Add(_activityDismiss);
+            body.Children.Add(_activityTitle);
+            body.Children.Add(_activityDetail);
+            body.Children.Add(_activityProgress);
+            body.Children.Add(actions);
+            _activityPanel = new Border
+            {
+                Width = 370, Padding = new Thickness(20), Margin = new Thickness(24),
+                Background = BgSidebar, BorderBrush = CyberCyanBrush, BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
+                Visibility = Visibility.Collapsed, Child = body
+            };
+            System.Windows.Automation.AutomationProperties.SetLiveSetting(_activityPanel, System.Windows.Automation.AutomationLiveSetting.Polite);
+            Grid.SetRow(_activityPanel, 1);
+            Panel.SetZIndex(_activityPanel, 10);
+            _rootGrid.Children.Add(_activityPanel);
+        }
+
+        private Task LoadModuleAsync(string key)
+        {
+            switch (key)
+            {
+                case "hardware": return RefreshHardwareNativeAsync();
+                case "tweaks": return RefreshTweaksStateNativeAsync();
+                case "apps": return RefreshInstalledAppsNativeAsync();
+                case "monitor": return RefreshLiveScriptsNativeAsync();
+                case "safety": return RefreshRestorePointsNativeAsync();
+                default: return Task.FromResult(0);
+            }
+        }
+
+        private string CurrentModuleKey()
+        {
+            return _activeTab == "optimization" || _activeTab == "debloat" ? "tweaks" : _activeTab;
+        }
+
+        private Task RunReadAsync(string key, string label, Func<Task> read)
+        {
+            Task pending;
+            if (_readTasks.TryGetValue(key, out pending)) return pending;
+            _readErrors.Remove(key);
+            _readLabels[key] = label;
+            _readProgress.Remove(key);
+            Task task = CompleteReadAsync(key, read);
+            _readTasks[key] = task;
+            UpdateActivityPanel();
+            return task;
+        }
+
+        private async Task CompleteReadAsync(string key, Func<Task> read)
+        {
+            await Task.Yield();
+            try
+            {
+                await read();
+                _loadedModules.Add(key);
+                if (key != "hardware") SetStatus("Lectura completada: " + _readLabels[key], "Listo");
+            }
+            catch (Exception ex)
+            {
+                _readErrors[key] = ex.Message;
+                AppendLog(_readLabels[key] + ": " + ex.Message, "ERROR");
+                SetStatus("No se pudo completar " + _readLabels[key].ToLowerInvariant(), "Reintento disponible");
+            }
+            finally
+            {
+                _readTasks.Remove(key);
+                if (CurrentModuleKey() == key) RenderCurrentTab();
+                UpdateActivityPanel();
+            }
+        }
+
+        private void ReportReadProgress(string key, int completed, int total, string detail)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _readProgress[key] = total > 0 ? Math.Min(100, completed * 100 / total) : -1;
+                _readLabels[key] = detail;
+                UpdateActivityPanel();
+            });
+        }
+
+        private void UpdateActivityPanel()
+        {
+            if (_activityPanel == null) return;
+            string key = CurrentModuleKey();
+            if (!_readTasks.ContainsKey(key) && !_readErrors.ContainsKey(key))
+                key = _readTasks.Keys.FirstOrDefault();
+            bool failed = key != null && _readErrors.ContainsKey(key);
+            bool busy = key != null && _readTasks.ContainsKey(key);
+            _activityPanel.Visibility = busy || failed ? Visibility.Visible : Visibility.Collapsed;
+            if (!busy && !failed) return;
+            _activityTitle.Text = failed ? "No se pudo completar la lectura" : "LECTURA EN CURSO";
+            _activityDetail.Text = failed ? _readLabels[key] + "\n" + _readErrors[key] : _readLabels[key];
+            _activityPanel.BorderBrush = failed ? RiskHighText : CyberCyanBrush;
+            _activityProgress.Visibility = failed ? Visibility.Collapsed : Visibility.Visible;
+            int progress;
+            bool measured = _readProgress.TryGetValue(key, out progress) && progress >= 0;
+            _activityProgress.IsIndeterminate = !measured && MotionAllowed;
+            _activityProgress.Value = measured ? progress : 0;
+            if (!failed && measured) _activityDetail.Text += " · " + progress + "% de etapas completadas";
+            _activityRetry.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+            _activityDismiss.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+            _activityRetry.Tag = key;
+            _activityDismiss.Tag = key;
+        }
+
+        private Task RefreshHardwareNativeAsync()
+        {
+            return RunReadAsync("hardware", "Auditoría de hardware", RefreshHardwareCoreAsync);
+        }
+
+        private async Task RefreshHardwareCoreAsync()
         {
             Stopwatch sw = Stopwatch.StartNew();
-            SetStatus("⚡ Escaneando hardware por canal nativo WMI/SMBIOS directo...", "Escaneo ultrarrápido");
+            SetStatus("Escaneando hardware por canal nativo WMI/SMBIOS...", "Auditoría en curso");
 
             var report = await Task.Run(() =>
             {
                 var result = new Dictionary<string, object>();
+                // Las consultas independientes se solapan para no sumar sus latencias al arranque.
+                var cpuRead = Task.Run(() => QueryFirstWmi("root\\CIMV2", "SELECT Name, Architecture, SocketDesignation, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, CurrentClockSpeed, L2CacheSize, L3CacheSize, VirtualizationFirmwareEnabled, LoadPercentage FROM Win32_Processor", true));
+                var tpmRead = Task.Run(() => QueryFirstWmi("root\\CIMV2\\Security\\MicrosoftTpm", "SELECT SpecVersion FROM Win32_Tpm"));
+                var diskRead = Task.Run(() => QueryAllWmi("root\\Microsoft\\Windows\\Storage", "SELECT FriendlyName, SerialNumber, MediaType, BusType, Size, HealthStatus FROM MSFT_PhysicalDisk"));
 
                 var enclosure = QueryFirstWmi("root\\CIMV2", "SELECT ChassisTypes, Manufacturer, SerialNumber FROM Win32_SystemEnclosure");
                 var bios = QueryFirstWmi("root\\CIMV2", "SELECT Manufacturer, SMBIOSBIOSVersion, ReleaseDate, SerialNumber FROM Win32_BIOS");
                 var csProd = QueryFirstWmi("root\\CIMV2", "SELECT IdentifyingNumber, UUID, Version FROM Win32_ComputerSystemProduct");
-                var cs = QueryFirstWmi("root\\CIMV2", "SELECT Manufacturer, Model, SystemSKUNumber, TotalPhysicalMemory FROM Win32_ComputerSystem");
+                var cs = QueryFirstWmi("root\\CIMV2", "SELECT Manufacturer, Model, SystemSKUNumber, TotalPhysicalMemory FROM Win32_ComputerSystem", true);
                 var batWin32 = QueryFirstWmi("root\\CIMV2", "SELECT BatteryStatus, EstimatedChargeRemaining, Chemistry FROM Win32_Battery");
 
                 int[] laptopCodes = new int[] { 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32 };
@@ -357,6 +970,8 @@ namespace Blackwall
                     { "sku", sku },
                     { "uuid", uuid }
                 };
+                if (cs.Count == 0) throw new InvalidOperationException("Windows no devolvió la identidad del equipo. Comprueba el servicio WMI y vuelve a intentar.");
+                ReportReadProgress("hardware", 1, 8, "Identidad y chasis · 1/8");
 
                 var board = QueryFirstWmi("root\\CIMV2", "SELECT Manufacturer, Product, Version, SerialNumber FROM Win32_BaseBoard");
                 string secureBoot = "No Soportado / Legacy";
@@ -378,7 +993,7 @@ namespace Blackwall
                 string tpmVersion = "No Detectado";
                 try
                 {
-                    var tpmWmi = QueryFirstWmi("root\\CIMV2\\Security\\MicrosoftTpm", "SELECT SpecVersion FROM Win32_Tpm");
+                    var tpmWmi = tpmRead.GetAwaiter().GetResult();
                     if (tpmWmi.ContainsKey("SpecVersion"))
                     {
                         tpmVersion = "TPM " + Convert.ToString(tpmWmi["SpecVersion"]).Split(',')[0].Trim() + " (Listo)";
@@ -407,7 +1022,9 @@ namespace Blackwall
                     { "tpmVersion", tpmVersion }
                 };
 
-                var cpu = QueryFirstWmi("root\\CIMV2", "SELECT Name, Architecture, SocketDesignation, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, CurrentClockSpeed, L2CacheSize, L3CacheSize, VirtualizationFirmwareEnabled, LoadPercentage FROM Win32_Processor");
+                var cpu = cpuRead.GetAwaiter().GetResult();
+                if (cpu.Count == 0) throw new InvalidOperationException("No se pudo leer el procesador mediante WMI. Comprueba el servicio WMI y vuelve a intentar.");
+                ReportReadProgress("hardware", 2, 8, "Placa base y seguridad · 2/8");
                 result["cpu"] = new Dictionary<string, object>
                 {
                     { "name", GetWmiStr(cpu, "Name", "CPU").Trim() },
@@ -424,6 +1041,7 @@ namespace Blackwall
                 };
 
                 var memArray = QueryFirstWmi("root\\CIMV2", "SELECT MemoryDevices FROM Win32_PhysicalMemoryArray");
+                ReportReadProgress("hardware", 3, 8, "Procesador · 3/8");
                 var sticks = QueryAllWmi("root\\CIMV2", "SELECT DeviceLocator, BankLabel, Capacity, ConfiguredClockSpeed, Speed, SMBIOSMemoryType, Manufacturer, PartNumber, SerialNumber, ConfiguredVoltage FROM Win32_PhysicalMemory");
                 int totalSlots = Math.Max(GetWmiInt(memArray, "MemoryDevices", sticks.Count), Math.Max(sticks.Count, 2));
 
@@ -493,6 +1111,7 @@ namespace Blackwall
                 };
 
                 double freeCGb = 0;
+                ReportReadProgress("hardware", 4, 8, "Memoria y sistema · 4/8");
                 try
                 {
                     DriveInfo cDrive = new DriveInfo("C");
@@ -501,7 +1120,7 @@ namespace Blackwall
                 catch { }
 
                 var storageList = new List<Dictionary<string, object>>();
-                var msftDisks = QueryAllWmi("root\\Microsoft\\Windows\\Storage", "SELECT FriendlyName, SerialNumber, MediaType, BusType, Size, HealthStatus FROM MSFT_PhysicalDisk");
+                var msftDisks = diskRead.GetAwaiter().GetResult();
                 if (msftDisks.Count > 0)
                 {
                     foreach (var md in msftDisks)
@@ -547,6 +1166,7 @@ namespace Blackwall
                     }
                 }
                 result["storage"] = storageList;
+                ReportReadProgress("hardware", 5, 8, "Almacenamiento · 5/8");
 
                 var gpuList = new List<Dictionary<string, object>>();
                 var wmiGpus = QueryAllWmi("root\\CIMV2", "SELECT Name, AdapterRAM, DriverVersion, DriverDate, CurrentHorizontalResolution, CurrentVerticalResolution, CurrentRefreshRate FROM Win32_VideoController");
@@ -567,6 +1187,7 @@ namespace Blackwall
                     });
                 }
                 result["gpus"] = gpuList;
+                ReportReadProgress("hardware", 6, 8, "Gráficos · 6/8");
 
                 var batteryData = new Dictionary<string, object>
                 {
@@ -607,6 +1228,7 @@ namespace Blackwall
                     batteryData["dischargeRateMw"] = rateMw;
                 }
                 result["battery"] = batteryData;
+                ReportReadProgress("hardware", 7, 8, "Batería · 7/8");
 
                 string displayVer = "23H2/24H2";
                 string partialKey = "OEM Digital License";
@@ -677,6 +1299,7 @@ namespace Blackwall
                     { "adapters", netAdapters }
                 };
 
+                ReportReadProgress("hardware", 8, 8, "Red e inventario completados · 8/8");
                 return result;
             });
 
@@ -692,14 +1315,20 @@ namespace Blackwall
             AppendLog("Auditoría WMI nativa completada en " + sw.ElapsedMilliseconds + " ms.", "WMI-NATIVE");
             SetStatus("🟢 Hardware auditado en " + sw.ElapsedMilliseconds + " ms (100% Nativo C#)", "Listo");
 
-            if (_activeTab == "hardware" || _activeTab == "optimization")
-            {
-                RenderCurrentTab();
-            }
         }
 
-        private async Task RefreshTweaksStateNativeAsync()
+        private Task RefreshTweaksStateNativeAsync()
         {
+            return RunReadAsync("tweaks", "Estado de optimizaciones", RefreshTweaksStateCoreAsync);
+        }
+
+        private async Task RefreshTweaksStateCoreAsync()
+        {
+            if (_hardware == null)
+            {
+                await RefreshHardwareNativeAsync();
+                if (_hardware == null) throw new InvalidOperationException("Primero debe completarse la identificación del equipo para seleccionar optimizaciones compatibles.");
+            }
             await Task.Run(() =>
             {
                 var map = new Dictionary<string, bool>();
@@ -735,27 +1364,14 @@ namespace Blackwall
                 _tweakStates = map;
             });
 
-            if (_activeTab == "optimization" || _activeTab == "debloat")
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    if (_tweakCardUpdaters.Count > 0)
-                    {
-                        foreach (var kv in _tweakStates)
-                        {
-                            if (_tweakCardUpdaters.ContainsKey(kv.Key))
-                                _tweakCardUpdaters[kv.Key](kv.Value);
-                        }
-                    }
-                    else
-                    {
-                        RenderCurrentTab();
-                    }
-                });
-            }
         }
 
-        private async Task RefreshInstalledAppsNativeAsync()
+        private Task RefreshInstalledAppsNativeAsync()
+        {
+            return RunReadAsync("apps", "Inventario de aplicaciones", RefreshInstalledAppsCoreAsync);
+        }
+
+        private async Task RefreshInstalledAppsCoreAsync()
         {
             await Task.Run(() =>
             {
@@ -785,11 +1401,14 @@ namespace Blackwall
                 _installedApps = appMap;
             });
 
-            if (_activeTab == "apps")
-                RenderCurrentTab();
         }
 
-        private async Task RefreshLiveScriptsNativeAsync()
+        private Task RefreshLiveScriptsNativeAsync()
+        {
+            return RunReadAsync("monitor", "Monitor de procesos", RefreshLiveScriptsCoreAsync);
+        }
+
+        private async Task RefreshLiveScriptsCoreAsync()
         {
             await Task.Run(() =>
             {
@@ -797,7 +1416,7 @@ namespace Blackwall
                 var list = new List<Dictionary<string, object>>();
                 var rows = QueryAllWmi(
                     "root\\CIMV2",
-                    "SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine, WorkingSetSize FROM Win32_Process WHERE Name='powershell.exe' OR Name='pwsh.exe' OR Name='cmd.exe' OR Name='wscript.exe' OR Name='cscript.exe' OR Name='mshta.exe'"
+                    "SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine, WorkingSetSize FROM Win32_Process WHERE Name='powershell.exe' OR Name='pwsh.exe' OR Name='cmd.exe' OR Name='wscript.exe' OR Name='cscript.exe' OR Name='mshta.exe'", true
                 );
 
                 foreach (var r in rows)
@@ -819,16 +1438,19 @@ namespace Blackwall
                 _liveScripts = list;
             });
 
-            if (_activeTab == "monitor")
-                RenderCurrentTab();
         }
 
-        private async Task RefreshRestorePointsNativeAsync()
+        private Task RefreshRestorePointsNativeAsync()
+        {
+            return RunReadAsync("safety", "Puntos de restauración", RefreshRestorePointsCoreAsync);
+        }
+
+        private async Task RefreshRestorePointsCoreAsync()
         {
             await Task.Run(() =>
             {
                 var list = new List<Dictionary<string, object>>();
-                var rows = QueryAllWmi("root\\default", "SELECT SequenceNumber, Description, CreationTime FROM SystemRestore");
+                var rows = QueryAllWmi("root\\default", "SELECT SequenceNumber, Description, CreationTime FROM SystemRestore", true);
                 foreach (var r in rows)
                 {
                     list.Add(new Dictionary<string, object>
@@ -841,8 +1463,6 @@ namespace Blackwall
                 _restorePoints = list;
             });
 
-            if (_activeTab == "safety")
-                RenderCurrentTab();
         }
 
         // ====================================================================
@@ -1232,18 +1852,18 @@ namespace Blackwall
         // ====================================================================
         // HELPERS NATIVOS WMI Y REGISTRO
         // ====================================================================
-        private Dictionary<string, object> QueryFirstWmi(string ns, string query)
+        private Dictionary<string, object> QueryFirstWmi(string ns, string query, bool required = false)
         {
-            var all = QueryAllWmi(ns, query);
+            var all = QueryAllWmi(ns, query, required);
             return all.Count > 0 ? all[0] : new Dictionary<string, object>();
         }
 
-        private List<Dictionary<string, object>> QueryAllWmi(string ns, string query)
+        private List<Dictionary<string, object>> QueryAllWmi(string ns, string query, bool required = false)
         {
             var list = new List<Dictionary<string, object>>();
             try
             {
-                var opts = new EnumerationOptions { ReturnImmediately = true, Rewindable = false, Timeout = TimeSpan.FromSeconds(2) };
+                var opts = new EnumerationOptions { ReturnImmediately = true, Rewindable = false, Timeout = TimeSpan.FromSeconds(required ? 5 : 2) };
                 using (var searcher = new ManagementObjectSearcher(new ManagementScope(ns), new ObjectQuery(query), opts))
                 using (var results = searcher.Get())
                 {
@@ -1258,7 +1878,10 @@ namespace Blackwall
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (required) throw new InvalidOperationException("No se pudo consultar WMI (" + ns + "). " + ex.Message, ex);
+            }
             return list;
         }
 
@@ -1386,55 +2009,61 @@ namespace Blackwall
             if (BgApp == null)
             {
                 // Primera inicialización de pinceles
-                BgApp = BrushHex(_isDark ? "#07070A" : "#F4F3F1");
-                BgSidebar = BrushHex(_isDark ? "#0B0B10" : "#FFFFFF");
-                BgSurface = BrushHex(_isDark ? "#111118" : "#FFFFFF");
-                BgElevated = BrushHex(_isDark ? "#181824" : "#E9E7E2");
-                BorderSubtle = BrushHex(_isDark ? "#1F202E" : "#D8D5CD");
-                TextPrimary = BrushHex(_isDark ? "#F0F2F6" : "#121216");
-                TextSecondary = BrushHex(_isDark ? "#8B90A0" : "#555866");
-                AccentBrush = BrushHex(_isDark ? "#FF1F4B" : "#C8102E");
-                CyberCyanBrush = BrushHex(_isDark ? "#00E5FF" : "#008BA3");
-                CyberYellowBrush = BrushHex(_isDark ? "#FCEE0A" : "#A37500");
+                BgApp = BrushHex(_isDark ? "#08080B" : "#F3F1F2");
+                BgSidebar = BrushHex(_isDark ? "#0C0C10" : "#FAF8F9");
+                BgSurface = BrushHex(_isDark ? "#111114" : "#FFFFFF");
+                BgElevated = BrushHex(_isDark ? "#201A20" : "#EEE7E9");
+                BorderSubtle = BrushHex(_isDark ? "#353039" : "#D5C9CE");
+                TextPrimary = BrushHex(_isDark ? "#F3F4F6" : "#231B20");
+                TextSecondary = BrushHex(_isDark ? "#B8BBC4" : "#62565F");
+                AccentBrush = BrushHex(_isDark ? "#8F1828" : "#8F1828");
+                CyberCyanBrush = BrushHex(_isDark ? "#EF6878" : "#9E2339");
+                CyberYellowBrush = BrushHex(_isDark ? "#EF6878" : "#9E2339");
                 RiskLowBg = BrushHex(_isDark ? "#0B1E19" : "#E6F7F0");
-                RiskLowText = BrushHex(_isDark ? "#00E5A3" : "#0D8258");
+                RiskLowText = BrushHex(_isDark ? "#8BD8B5" : "#206545");
                 RiskMedBg = BrushHex(_isDark ? "#2A2207" : "#FFF8E1");
-                RiskMedText = BrushHex(_isDark ? "#FCEE0A" : "#B26A00");
+                RiskMedText = BrushHex(_isDark ? "#E8C080" : "#825007");
                 RiskHighBg = BrushHex(_isDark ? "#2B0A11" : "#FDE8EA");
-                RiskHighText = BrushHex(_isDark ? "#FF3B5C" : "#C8102E");
+                RiskHighText = BrushHex(_isDark ? "#FF8998" : "#C8102E");
             }
             else
             {
                 // Mutación reactiva en caliente sin destruir el árbol visual
-                BgApp.Color = ColorHex(_isDark ? "#07070A" : "#F4F3F1");
-                BgSidebar.Color = ColorHex(_isDark ? "#0B0B10" : "#FFFFFF");
-                BgSurface.Color = ColorHex(_isDark ? "#111118" : "#FFFFFF");
-                BgElevated.Color = ColorHex(_isDark ? "#181824" : "#E9E7E2");
-                BorderSubtle.Color = ColorHex(_isDark ? "#1F202E" : "#D8D5CD");
-                TextPrimary.Color = ColorHex(_isDark ? "#F0F2F6" : "#121216");
-                TextSecondary.Color = ColorHex(_isDark ? "#8B90A0" : "#555866");
-                AccentBrush.Color = ColorHex(_isDark ? "#FF1F4B" : "#C8102E");
-                CyberCyanBrush.Color = ColorHex(_isDark ? "#00E5FF" : "#008BA3");
-                CyberYellowBrush.Color = ColorHex(_isDark ? "#FCEE0A" : "#A37500");
+                BgApp.Color = ColorHex(_isDark ? "#08080B" : "#F3F1F2");
+                BgSidebar.Color = ColorHex(_isDark ? "#0C0C10" : "#FAF8F9");
+                BgSurface.Color = ColorHex(_isDark ? "#111114" : "#FFFFFF");
+                BgElevated.Color = ColorHex(_isDark ? "#201A20" : "#EEE7E9");
+                BorderSubtle.Color = ColorHex(_isDark ? "#353039" : "#D5C9CE");
+                TextPrimary.Color = ColorHex(_isDark ? "#F3F4F6" : "#231B20");
+                TextSecondary.Color = ColorHex(_isDark ? "#B8BBC4" : "#62565F");
+                AccentBrush.Color = ColorHex(_isDark ? "#8F1828" : "#8F1828");
+                CyberCyanBrush.Color = ColorHex(_isDark ? "#EF6878" : "#9E2339");
+                CyberYellowBrush.Color = ColorHex(_isDark ? "#EF6878" : "#9E2339");
                 RiskLowBg.Color = ColorHex(_isDark ? "#0B1E19" : "#E6F7F0");
-                RiskLowText.Color = ColorHex(_isDark ? "#00E5A3" : "#0D8258");
+                RiskLowText.Color = ColorHex(_isDark ? "#8BD8B5" : "#206545");
                 RiskMedBg.Color = ColorHex(_isDark ? "#2A2207" : "#FFF8E1");
-                RiskMedText.Color = ColorHex(_isDark ? "#FCEE0A" : "#B26A00");
+                RiskMedText.Color = ColorHex(_isDark ? "#E8C080" : "#825007");
                 RiskHighBg.Color = ColorHex(_isDark ? "#2B0A11" : "#FDE8EA");
-                RiskHighText.Color = ColorHex(_isDark ? "#FF3B5C" : "#C8102E");
+                RiskHighText.Color = ColorHex(_isDark ? "#FF8998" : "#C8102E");
             }
+            // WPF may freeze template resources; keep the mutable palette outside that dictionary.
+            Resources["CyberFocusBrush"] = CyberCyanBrush.Clone();
+            Resources["CyberTrackBrush"] = BorderSubtle.Clone();
+            Resources[SystemColors.HighlightBrushKey] = CyberCyanBrush.Clone();
+            Resources[SystemColors.HighlightTextBrushKey] = BgSidebar.Clone();
         }
 
         private void TriggerLogoGlitch()
         {
-            if (_logoBox == null) return;
+            if (_logoBox == null || !MotionAllowed) return;
             try
             {
                 DoubleAnimation anim = new DoubleAnimation
                 {
-                    From = 0.35,
+                    From = 0.72,
                     To = 1.0,
-                    Duration = TimeSpan.FromMilliseconds(260)
+                    Duration = TimeSpan.FromMilliseconds(180),
+                    FillBehavior = FillBehavior.Stop
                 };
                 _logoBox.BeginAnimation(UIElement.OpacityProperty, anim);
             }
@@ -1465,7 +2094,7 @@ namespace Blackwall
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
-                Focusable = false
+                ToolTip = isClose ? "Cerrar" : text == "—" ? "Minimizar" : "Maximizar o restaurar"
             };
 
             WindowChrome.SetIsHitTestVisibleInChrome(btn, true);
@@ -1500,6 +2129,70 @@ namespace Blackwall
         private void BuildShellUI()
         {
             Background = BgApp;
+            FontFamily = new FontFamily("Segoe UI");
+            FontSize = 13;
+            UseLayoutRounding = true;
+            SnapsToDevicePixels = true;
+            TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+            Resources[typeof(Button)] = (Style)System.Windows.Markup.XamlReader.Parse(@"
+                <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>
+                    <Setter Property='MinHeight' Value='32'/>
+                    <Setter Property='Template'>
+                        <Setter.Value><ControlTemplate TargetType='Button'>
+                            <Border x:Name='Frame' Background='{TemplateBinding Background}'
+                                BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'
+                                CornerRadius='0,0,7,0' Padding='{TemplateBinding Padding}' SnapsToDevicePixels='True'>
+                                <Grid ClipToBounds='True'>
+                                    <ContentPresenter HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}'
+                                        VerticalAlignment='Center' RecognizesAccessKey='True'/>
+                                    <Border x:Name='Sheen' IsHitTestVisible='False'/>
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.85'/></Trigger>
+                                <Trigger Property='IsPressed' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.62'/></Trigger>
+                                <Trigger Property='IsKeyboardFocused' Value='True'>
+                                    <Setter TargetName='Frame' Property='BorderBrush' Value='{DynamicResource CyberFocusBrush}'/>
+                                    <Setter TargetName='Frame' Property='BorderThickness' Value='2'/>
+                                </Trigger>
+                                <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.4'/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate></Setter.Value>
+                    </Setter>
+                </Style>");
+            ((Style)Resources[typeof(Button)]).Setters.Add(new EventSetter(FrameworkElement.LoadedEvent, new RoutedEventHandler(OnMotionButtonLoaded)));
+            Resources[typeof(ScrollBar)] = (Style)System.Windows.Markup.XamlReader.Parse(@"
+                <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='ScrollBar'>
+                    <Setter Property='Width' Value='10'/>
+                    <Setter Property='Background' Value='Transparent'/>
+                    <Setter Property='Template'><Setter.Value><ControlTemplate TargetType='ScrollBar'>
+                        <Track x:Name='PART_Track' Orientation='{TemplateBinding Orientation}' IsDirectionReversed='True'
+                            Minimum='{TemplateBinding Minimum}' Maximum='{TemplateBinding Maximum}'
+                            ViewportSize='{TemplateBinding ViewportSize}' Value='{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}'>
+                            <Track.DecreaseRepeatButton><RepeatButton x:Name='PageBefore' Command='ScrollBar.PageUpCommand' Background='Transparent' Focusable='False'>
+                                <RepeatButton.Template><ControlTemplate TargetType='RepeatButton'><Border Background='Transparent'/></ControlTemplate></RepeatButton.Template>
+                            </RepeatButton></Track.DecreaseRepeatButton>
+                            <Track.Thumb><Thumb Background='{DynamicResource CyberTrackBrush}'>
+                                <Thumb.Template><ControlTemplate TargetType='Thumb'><Border x:Name='Grip' Background='{TemplateBinding Background}' CornerRadius='2' Margin='3,2'/>
+                                    <ControlTemplate.Triggers><Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Grip' Property='Background' Value='{DynamicResource CyberFocusBrush}'/></Trigger></ControlTemplate.Triggers>
+                                </ControlTemplate></Thumb.Template>
+                            </Thumb></Track.Thumb>
+                            <Track.IncreaseRepeatButton><RepeatButton x:Name='PageAfter' Command='ScrollBar.PageDownCommand' Background='Transparent' Focusable='False'>
+                                <RepeatButton.Template><ControlTemplate TargetType='RepeatButton'><Border Background='Transparent'/></ControlTemplate></RepeatButton.Template>
+                            </RepeatButton></Track.IncreaseRepeatButton>
+                        </Track>
+                        <ControlTemplate.Triggers><Trigger Property='Orientation' Value='Horizontal'>
+                            <Setter TargetName='PART_Track' Property='IsDirectionReversed' Value='False'/>
+                            <Setter TargetName='PageBefore' Property='Command' Value='ScrollBar.PageLeftCommand'/>
+                            <Setter TargetName='PageAfter' Property='Command' Value='ScrollBar.PageRightCommand'/>
+                        </Trigger></ControlTemplate.Triggers>
+                    </ControlTemplate></Setter.Value></Setter>
+                    <Style.Triggers><Trigger Property='Orientation' Value='Horizontal'>
+                        <Setter Property='Width' Value='Auto'/><Setter Property='Height' Value='10'/>
+                    </Trigger></Style.Triggers>
+                </Style>");
             _rootGrid = new Grid();
             _rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(54) });
             _rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -1515,7 +2208,7 @@ namespace Blackwall
             };
 
             Grid topGrid = new Grid();
-            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(350) });
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(230) });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -1527,21 +2220,28 @@ namespace Blackwall
             {
                 Width = 34,
                 Height = 34,
-                CornerRadius = new CornerRadius(6, 0, 6, 0),
-                Background = new LinearGradientBrush(ColorHex("#FF1F4B"), ColorHex("#8B0018"), 45),
+                CornerRadius = new CornerRadius(0, 0, 9, 0),
+                Background = Brushes.Transparent,
                 Margin = new Thickness(0, 0, 10, 0),
                 Cursor = Cursors.Hand
             };
-            _logoBox.Child = new TextBlock
+            using (Stream logoStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("blackwall-mark.png"))
             {
-                Text = "BW",
-                Foreground = Brushes.White,
-                FontWeight = FontWeights.Black,
-                FontSize = 14.5,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                if (logoStream != null)
+                {
+                    var logo = new BitmapImage();
+                    logo.BeginInit();
+                    logo.CacheOption = BitmapCacheOption.OnLoad;
+                    logo.StreamSource = logoStream;
+                    logo.EndInit();
+                    logo.Freeze();
+                    Icon = logo;
+                    _logoBox.Child = new Image { Source = logo, Stretch = Stretch.Uniform };
+                }
+            }
             _logoBox.MouseLeftButtonUp += (s, e) => TriggerLogoGlitch();
+            _logoHalo = new System.Windows.Media.Effects.DropShadowEffect { Color = ColorHex("#EF4055"), BlurRadius = 3, ShadowDepth = 0, Opacity = 0.8 };
+            _logoBox.Effect = _logoHalo;
             brandStack.Children.Add(_logoBox);
 
             StackPanel titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -1555,8 +2255,8 @@ namespace Blackwall
             });
             brandLine.Children.Add(new TextBlock
             {
-                Text = " // ICE PROTOCOL",
-                Foreground = AccentBrush,
+                Text = " / MN",
+                Foreground = CyberCyanBrush,
                 FontWeight = FontWeights.Bold,
                 FontSize = 11.5,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -1568,7 +2268,7 @@ namespace Blackwall
             {
                 Text = _hardware != null && _hardware.ContainsKey("chassis")
                     ? FormatChassisHeader(_hardware["chassis"] as Dictionary<string, object>)
-                    : "⚡ Iniciando motor WMI directo...",
+                    : "SYSTEM INTERFACE // Inicializando",
                 Foreground = CyberCyanBrush,
                 FontSize = 11,
                 FontWeight = FontWeights.SemiBold
@@ -1593,7 +2293,7 @@ namespace Blackwall
                 Background = BgSurface,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
+                CornerRadius = new CornerRadius(0, 0, 7, 0),
                 Height = 35,
                 Padding = new Thickness(10, 0, 10, 0)
             };
@@ -1602,7 +2302,7 @@ namespace Blackwall
             DockPanel omniDock = new DockPanel { LastChildFill = true };
             TextBlock searchIcon = new TextBlock
             {
-                Text = "🔍 ",
+                Text = "⌕",
                 Foreground = TextSecondary,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
@@ -1650,17 +2350,16 @@ namespace Blackwall
                 Background = BgSurface,
                 BorderBrush = AccentBrush,
                 BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = new CornerRadius(0, 0, 10, 0),
                 Padding = new Thickness(8),
                 Margin = new Thickness(0, 4, 0, 0)
             };
             _omniboxResultsPanel = new StackPanel();
-            popupBorder.Child = new ScrollViewer
-            {
-                MaxHeight = 390,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = _omniboxResultsPanel
-            };
+            var searchScroll = CreateSmoothScroller();
+            searchScroll.MaxHeight = 390;
+            searchScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            searchScroll.Content = _omniboxResultsPanel;
+            popupBorder.Child = searchScroll;
             _omniboxPopup.Child = popupBorder;
 
             Grid.SetColumn(omniboxContainer, 1);
@@ -1674,29 +2373,31 @@ namespace Blackwall
 
             if (!IsAdministrator())
             {
-                Button adminBtn = CreateStyledButton("🛡️ Elevar a Admin", true);
+                Button adminBtn = CreateStyledButton("Administrador", false);
                 adminBtn.Margin = new Thickness(0, 0, 6, 0);
                 adminBtn.Click += (s, e) => RelaunchAsAdministrator();
                 actionsStack.Children.Add(adminBtn);
             }
 
-            Button rpBtn = CreateStyledButton("🛡️ Punto Restauración", false);
+            Button rpBtn = CreateStyledButton("Restauración", false);
+            rpBtn.ToolTip = "Crear un punto de restauración de Windows";
             rpBtn.Margin = new Thickness(0, 0, 6, 0);
             rpBtn.Click += async (s, e) => await CreateRestorePointNowAsync();
             actionsStack.Children.Add(rpBtn);
 
-            _otaBtn = CreateStyledButton("🔄 OTA v1.3.0", false);
+            _otaBtn = CreateStyledButton("Actualizaciones", false);
             _otaBtn.Margin = new Thickness(0, 0, 6, 0);
             _otaBtn.Click += (s, e) => ShowOtaUpdateDialog();
             actionsStack.Children.Add(_otaBtn);
 
-            _themeBtn = CreateStyledButton(_isDark ? "☀️ Arasaka Light" : "🌙 Blackwall ICE", false);
+            _themeBtn = CreateStyledButton(_isDark ? "Modo claro" : "Modo oscuro", false);
             _themeBtn.Margin = new Thickness(0, 0, 8, 0);
             _themeBtn.Click += (s, e) =>
             {
                 _isDark = !_isDark;
+                SaveUiPreferences();
                 UpdateThemeBrushes();
-                _themeBtn.Content = _isDark ? "☀️ Arasaka Light" : "🌙 Blackwall ICE";
+                _themeBtn.Content = _isDark ? "Modo claro" : "Modo oscuro";
                 TriggerLogoGlitch();
             };
             actionsStack.Children.Add(_themeBtn);
@@ -1732,10 +2433,13 @@ namespace Blackwall
             topBar.Child = topGrid;
             Grid.SetRow(topBar, 0);
             _rootGrid.Children.Add(topBar);
+            _headerEnergy = new EnergyTrace { Height = 12, VerticalAlignment = VerticalAlignment.Bottom };
+            _rootGrid.Children.Add(_headerEnergy);
 
             // 2. CUERPO CENTRAL
             Grid bodyGrid = new Grid();
-            bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(255) });
+            _sidebarColumn = new ColumnDefinition { Width = new GridLength(248) };
+            bodyGrid.ColumnDefinitions.Add(_sidebarColumn);
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             Border sidebarBorder = new Border
@@ -1743,67 +2447,90 @@ namespace Blackwall
                 Background = BgSidebar,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(0, 0, 1, 0),
-                Padding = new Thickness(12, 16, 12, 16)
+                Padding = new Thickness(14, 24, 14, 18)
             };
 
-            DockPanel sidebarDock = new DockPanel { LastChildFill = false };
+            _sidebarBorder = sidebarBorder;
+            DockPanel sidebarDock = new DockPanel { LastChildFill = true };
+            _sidebarToggle = CreateStyledButton("☰    Contraer menú", false);
+            _sidebarToggle.Padding = new Thickness(8, 8, 8, 8);
+            _sidebarToggle.Margin = new Thickness(0, 0, 0, 16);
+            _sidebarToggle.Click += (s, e) => ToggleSidebar();
+            DockPanel.SetDock(_sidebarToggle, Dock.Top);
+            sidebarDock.Children.Add(_sidebarToggle);
+            _motionToggle = CreateStyledButton("Animaciones activas", false);
+            _motionToggle.Padding = new Thickness(6, 8, 6, 8);
+            _motionToggle.Margin = new Thickness(0, 12, 0, 0);
+            _motionToggle.Click += (s, e) => { _reduceMotion = !_reduceMotion; UpdateMotionPreference(); SaveUiPreferences(); };
+            DockPanel.SetDock(_motionToggle, Dock.Bottom);
+            sidebarDock.Children.Add(_motionToggle);
             StackPanel navStack = new StackPanel();
             _navButtons.Clear();
 
-            AddNavGroupLabel(navStack, "AUDITORÍA FÍSICA Y LÓGICA");
-            AddNavButton(navStack, "hardware", "📊  Auditoría de Hardware");
+            AddNavGroupLabel(navStack, "DIAGNÓSTICO");
+            AddNavButton(navStack, "hardware", "Hardware");
 
-            AddNavGroupLabel(navStack, "RENDIMIENTO Y PRIVACIDAD");
-            AddNavButton(navStack, "optimization", "🚀  Optimización Adaptativa");
-            AddNavButton(navStack, "debloat", "🧹  Debloat & Privacidad");
+            AddNavGroupLabel(navStack, "CONFIGURACIÓN");
+            AddNavButton(navStack, "optimization", "Rendimiento");
+            AddNavButton(navStack, "debloat", "Privacidad");
 
-            AddNavGroupLabel(navStack, "AUTOMATIZACIÓN Y PROCESOS");
-            AddNavButton(navStack, "apps", "📦  Instalador Desatendido");
-            AddNavButton(navStack, "monitor", "📡  Scripts en Ejecución");
+            AddNavGroupLabel(navStack, "HERRAMIENTAS");
+            AddNavButton(navStack, "apps", "Software");
+            AddNavButton(navStack, "monitor", "Procesos");
 
-            AddNavGroupLabel(navStack, "PROTECCIÓN DEL SISTEMA");
-            AddNavButton(navStack, "safety", "🛡️  Seguridad y Restauración");
-
-            DockPanel.SetDock(navStack, Dock.Top);
-            sidebarDock.Children.Add(navStack);
+            AddNavGroupLabel(navStack, "RECUPERACIÓN");
+            AddNavButton(navStack, "safety", "Seguridad");
 
             Border infoBox = new Border
             {
                 Background = BgSurface,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(10)
+                CornerRadius = new CornerRadius(0, 0, 10, 0),
+                Padding = new Thickness(13)
             };
             StackPanel infoStack = new StackPanel();
             infoStack.Children.Add(new TextBlock
             {
-                Text = "🛡️ 100% Libre de Falsos Positivos",
-                Foreground = RiskLowText,
+                Text = "MURO NEGRO",
+                Foreground = CyberCyanBrush,
                 FontWeight = FontWeights.Bold,
-                FontSize = 11.5
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10.5
             });
             infoStack.Children.Add(new TextBlock
             {
-                Text = "Motor C# nativo firmado sin scripts .ps1 ni llamadas a PowerShell.",
+                Text = "Revisa el impacto antes de aplicar cambios.",
                 Foreground = TextSecondary,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 11,
-                Margin = new Thickness(0, 3, 0, 0)
+                Margin = new Thickness(0, 6, 0, 0)
             });
             infoBox.Child = infoStack;
+            _expandedSidebarElements.Add(infoBox);
             DockPanel.SetDock(infoBox, Dock.Bottom);
             sidebarDock.Children.Add(infoBox);
+            var navScroll = CreateSmoothScroller();
+            navScroll.Content = navStack;
+            navScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            navScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            navScroll.Margin = new Thickness(0, 0, 0, 16);
+            sidebarDock.Children.Add(navScroll);
 
             sidebarBorder.Child = sidebarDock;
             Grid.SetColumn(sidebarBorder, 0);
             bodyGrid.Children.Add(sidebarBorder);
+            _sidebarEnergy = new EnergyTrace { Width = 8, Vertical = true, HorizontalAlignment = HorizontalAlignment.Left };
+            bodyGrid.Children.Add(_sidebarEnergy);
 
-            _mainScroll = new ScrollViewer
+            _mainScroll = CreateSmoothScroller();
+            _mainScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _mainScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            _mainScroll.Padding = new Thickness(28, 24, 24, 24);
+            _mainScroll.ScrollChanged += (s, e) =>
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Padding = new Thickness(22, 18, 22, 22)
+                var page = _mainScroll.Content as FrameworkElement;
+                if (e.VerticalChange != 0 && page != null) RevealVisibleCards(page);
             };
             Grid.SetColumn(_mainScroll, 1);
             bodyGrid.Children.Add(_mainScroll);
@@ -1822,10 +2549,10 @@ namespace Blackwall
             DockPanel footerDock = new DockPanel { LastChildFill = false };
             _statusText = new TextBlock
             {
-                Text = "🟢 Listo — Motor Nativo Certificado (Sin llamadas a PowerShell)",
-                Foreground = TextPrimary,
+                Text = "●  SISTEMA LISTO",
+                Foreground = CyberCyanBrush,
                 VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12.2,
+                FontSize = 11.5,
                 FontWeight = FontWeights.SemiBold
             };
             DockPanel.SetDock(_statusText, Dock.Left);
@@ -1842,7 +2569,7 @@ namespace Blackwall
             };
             footerRight.Children.Add(_taskText);
 
-            Button consoleJumpBtn = CreateStyledButton("💻 Ver Consola en Vivo", false);
+            Button consoleJumpBtn = CreateStyledButton("Consola en vivo ↗", false);
             consoleJumpBtn.Padding = new Thickness(10, 4, 10, 4);
             consoleJumpBtn.Click += (s, e) => SwitchTab("monitor");
             footerRight.Children.Add(consoleJumpBtn);
@@ -1860,35 +2587,60 @@ namespace Blackwall
                 Child = _rootGrid
             };
             Content = _rootBorder;
+            ApplySidebarState();
             UpdateNavSelection();
         }
 
         private void AddNavGroupLabel(StackPanel parent, string text)
         {
-            parent.Children.Add(new TextBlock
+            var label = new TextBlock
             {
                 Text = text,
                 Foreground = TextSecondary,
-                FontSize = 10.5,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(10, 12, 6, 5)
-            });
+                FontSize = 9.2,
+                FontFamily = new FontFamily("Consolas"),
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(10, 10, 6, 6)
+            };
+            _expandedSidebarElements.Add(label);
+            parent.Children.Add(label);
         }
 
         private void AddNavButton(StackPanel parent, string tabKey, string label)
         {
+            string title = Regex.Replace(label, @"^[^\p{L}]+", "");
+            Grid content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+            string[] glyphs = { "\uE7F4", "\uE9D9", "\uE72E", "\uE71D", "\uE9D5", "\uE83D" };
+            TextBlock number = new TextBlock { Text = glyphs[_navButtons.Count], FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 16, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock name = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            TextBlock arrow = new TextBlock { Text = "›", FontSize = 17, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+            Grid.SetColumn(name, 1);
+            Grid.SetColumn(arrow, 2);
+            content.Children.Add(number);
+            content.Children.Add(name);
+            content.Children.Add(arrow);
             Button btn = new Button
             {
-                Content = label,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(12, 9, 12, 9),
+                Content = content,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Padding = new Thickness(10, 9, 10, 9),
                 Margin = new Thickness(0, 2, 0, 2),
-                FontSize = 13.2,
+                FontSize = 12,
                 Cursor = Cursors.Hand,
-                BorderThickness = new Thickness(0),
+                BorderThickness = new Thickness(2, 0, 0, 0),
+                BorderBrush = Brushes.Transparent,
                 Background = Brushes.Transparent,
-                Foreground = TextSecondary
+                Foreground = TextSecondary,
+                ToolTip = title
             };
+            System.Windows.Automation.AutomationProperties.SetName(btn, title);
+            ToolTip navigationTip = new ToolTip { Content = title, PlacementTarget = btn, Placement = PlacementMode.Right };
+            btn.ToolTip = navigationTip;
+            btn.GotKeyboardFocus += (s, e) => { if (_sidebarCollapsed) navigationTip.IsOpen = true; };
+            btn.LostKeyboardFocus += (s, e) => navigationTip.IsOpen = false;
             btn.Click += (s, e) => SwitchTab(tabKey);
             _navButtons[tabKey] = btn;
             parent.Children.Add(btn);
@@ -1900,16 +2652,19 @@ namespace Blackwall
             {
                 bool active = kv.Key == _activeTab;
                 kv.Value.Background = active ? BgElevated : Brushes.Transparent;
-                kv.Value.Foreground = active ? AccentBrush : TextSecondary;
+                kv.Value.Foreground = active ? CyberCyanBrush : TextSecondary;
+                kv.Value.BorderBrush = active ? AccentBrush : Brushes.Transparent;
                 kv.Value.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
             }
         }
 
         private void SwitchTab(string tabKey)
         {
+            bool changed = _activeTab != tabKey;
             _activeTab = tabKey;
             UpdateNavSelection();
             RenderCurrentTab();
+            if (changed) _mainScroll.ScrollToTop();
         }
 
         // ====================================================================
@@ -2041,7 +2796,10 @@ namespace Blackwall
             _tweakCardUpdaters.Clear();
 
             UIElement content = null;
-            switch (_activeTab)
+            string moduleKey = CurrentModuleKey();
+            if (moduleKey != "hardware" && !_loadedModules.Contains(moduleKey))
+                content = CreateBanner(_readErrors.ContainsKey(moduleKey) ? "Lectura interrumpida" : "Preparando módulo", "El contenido estará disponible al completar la lectura. Puedes seguir navegando.");
+            else switch (_activeTab)
             {
                 case "hardware":
                     content = BuildHardwareView();
@@ -2068,11 +2826,25 @@ namespace Blackwall
                 Grid centeredWrap = new Grid
                 {
                     MaxWidth = 1360,
-                    HorizontalAlignment = HorizontalAlignment.Center
+                    HorizontalAlignment = HorizontalAlignment.Stretch
                 };
                 centeredWrap.Children.Add(content);
+                StopEntrances();
+                _motionPage = null;
+                _pageMotionCards.Clear();
                 _mainScroll.Content = centeredWrap;
+                bool ready = moduleKey == "hardware" ? _hardware != null : _loadedModules.Contains(moduleKey);
+                if (_lastRenderedTab != _activeTab || (!_lastRenderedReady && ready))
+                {
+                    AnimateEntrance(centeredWrap, 16, 360);
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => AnimatePage(centeredWrap)));
+                }
+                _lastRenderedTab = _activeTab;
+                _lastRenderedReady = ready;
             }
+            if (!_loadedModules.Contains(moduleKey) && !_readErrors.ContainsKey(moduleKey))
+                LoadModuleAsync(moduleKey);
+            UpdateActivityPanel();
         }
 
         // --------------------------------------------------------------------
@@ -2085,8 +2857,8 @@ namespace Blackwall
             if (_hardware == null)
             {
                 root.Children.Add(CreateBanner(
-                    "⚡ Auditando Hardware por Canal WMI Nativo (< 0.35s)...",
-                    "Leyendo tablas SMBIOS, slots físicos de RAM, unidades NVMe/SSD y batería..."
+                    _readErrors.ContainsKey("hardware") ? "Lectura de hardware interrumpida" : "Inicializando auditoría de hardware",
+                    _readErrors.ContainsKey("hardware") ? "No se completó la auditoría. Puedes reintentar desde el aviso de error o cambiar de módulo." : "Leyendo tablas SMBIOS, slots físicos de RAM, unidades NVMe/SSD y batería..."
                 ));
                 return root;
             }
@@ -2277,20 +3049,20 @@ namespace Blackwall
             string effectiveDevice = _optDeviceScope == "auto" ? (isLaptop ? "laptop" : "desktop") : _optDeviceScope;
 
             StackPanel topBtns = new StackPanel { Orientation = Orientation.Horizontal };
-            Button recheckBtn = CreateStyledButton("🔍 Re-evaluar Estados (<5ms)", false);
+            Button recheckBtn = CreateStyledButton("Revisar estados", false);
             recheckBtn.Margin = new Thickness(0, 0, 8, 0);
             recheckBtn.Click += async (s, e) => await RefreshTweaksStateNativeAsync();
             topBtns.Children.Add(recheckBtn);
 
-            Button applyProfileBtn = CreateStyledButton("⚡ Aplicar Perfil Seguro (" + (isLaptop ? "Laptop" : "Desktop") + ")", true);
+            Button applyProfileBtn = CreateStyledButton("Perfil de riesgo bajo (" + (isLaptop ? "Laptop" : "Desktop") + ")", true);
             applyProfileBtn.Click += async (s, e) => await ApplyRecommendedSafeProfileAsync(isLaptop ? "laptop" : "desktop");
             topBtns.Children.Add(applyProfileBtn);
 
             root.Children.Add(CreateBanner(
                 categoryType == "optimization"
-                    ? "🚀 Optimización Adaptativa & Gaming Tweaks (Laptop / Desktop + Ceito Tweaks)"
-                    : "🧹 BLACKWALL ICE Debloat (Chris Titus WinUtil + Privacidad & Servicios)",
-                "Ejecución 100% nativa sobre el Registro y Servicios de Windows (Sin scripts .ps1 ni alertas de Antivirus).",
+                    ? "Optimización del sistema"
+                    : "Privacidad y debloat",
+                "Ajustes de rendimiento, servicios y privacidad. Revisa el nivel de riesgo antes de aplicar cambios.",
                 topBtns
             ));
 
@@ -2301,8 +3073,8 @@ namespace Blackwall
             StackPanel packStack = new StackPanel();
             packStack.Children.Add(new TextBlock
             {
-                Text = "📦 PAQUETES DE DESPLIEGUE RÁPIDO BLACKWALL (1 CLIC — CREA PUNTO DE RESTAURACIÓN AUTOMÁTICO):",
-                Foreground = AccentBrush,
+                Text = "Paquetes de ajustes · revisa el impacto antes de aplicar",
+                Foreground = CyberCyanBrush,
                 FontSize = 10.8,
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 8)
@@ -2311,29 +3083,29 @@ namespace Blackwall
             WrapPanel packBtns = new WrapPanel();
             if (categoryType == "debloat")
             {
-                Button btnTitus = CreateStyledButton("🛡️ Pack Chris Titus Essential (🟢 Bajo Riesgo)", true);
+                Button btnTitus = CreateStyledButton("Esenciales · riesgo bajo", true);
                 btnTitus.Margin = new Thickness(0, 0, 8, 6);
                 btnTitus.Click += async (s, e) => await ApplyBlackwallPackAsync("titus_essential", "Chris Titus Essential");
                 packBtns.Children.Add(btnTitus);
 
-                Button btnPrivacy = CreateStyledButton("👁️ Pack Anti-IA, Copilot, Recall & Edge (🟢 Bajo Riesgo)", false);
+                Button btnPrivacy = CreateStyledButton("IA y privacidad · riesgo bajo", false);
                 btnPrivacy.Margin = new Thickness(0, 0, 8, 6);
                 btnPrivacy.Click += async (s, e) => await ApplyBlackwallPackAsync("privacy_ai", "Anti-IA & Privacidad");
                 packBtns.Children.Add(btnPrivacy);
 
-                Button btnServices = CreateStyledButton("⚙️ Pack Servicios a Manual (🟢/🟡 Estilo Chris Titus)", false);
+                Button btnServices = CreateStyledButton("Servicios · precaución", false);
                 btnServices.Margin = new Thickness(0, 0, 8, 6);
                 btnServices.Click += async (s, e) => await ApplyBlackwallPackAsync("services_light", "Servicios Ligeros");
                 packBtns.Children.Add(btnServices);
             }
             else
             {
-                Button btnCeito = CreateStyledButton("🎯 Pack Ceito Gaming & 0 Input Lag (🟢/🟡 Ratón 1:1, MMCSS, HAGS)", true);
+                Button btnCeito = CreateStyledButton("Juego y respuesta · precaución", true);
                 btnCeito.Margin = new Thickness(0, 0, 8, 6);
                 btnCeito.Click += async (s, e) => await ApplyBlackwallPackAsync("ceito_gaming", "Ceito Gaming & Baja Latencia");
                 packBtns.Children.Add(btnCeito);
 
-                Button btnPower = CreateStyledButton("⚡ Pack Energía Adaptativa (" + (isLaptop ? "Laptop Batería/Térmico" : "Desktop Ultimate") + ")", false);
+                Button btnPower = CreateStyledButton("Energía (" + (isLaptop ? "Laptop Batería/Térmico" : "Desktop Ultimate") + ")", false);
                 btnPower.Margin = new Thickness(0, 0, 8, 6);
                 btnPower.Click += async (s, e) => await ApplyBlackwallPackAsync("adaptive_power", "Energía Adaptativa");
                 packBtns.Children.Add(btnPower);
@@ -2344,14 +3116,14 @@ namespace Blackwall
 
             // Filtros de Dispositivo y Nivel de Riesgo
             WrapPanel filterBar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            AddFilterButton(filterBar, "💻 Enfoque Laptop", effectiveDevice == "laptop", () => { _optDeviceScope = "laptop"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "🖥️ Enfoque Desktop", effectiveDevice == "desktop", () => { _optDeviceScope = "desktop"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "🌐 Todos los Equipos", effectiveDevice == "all", () => { _optDeviceScope = "all"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Portátil", effectiveDevice == "laptop", () => { _optDeviceScope = "laptop"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Escritorio", effectiveDevice == "desktop", () => { _optDeviceScope = "desktop"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Ambos", effectiveDevice == "all", () => { _optDeviceScope = "all"; RenderCurrentTab(); });
 
-            AddFilterButton(filterBar, "Todos los Riesgos", _optRiskScope == "all", () => { _optRiskScope = "all"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "🟢 Riesgo Bajo", _optRiskScope == "low", () => { _optRiskScope = "low"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "🟡 Riesgo Medio", _optRiskScope == "medium", () => { _optRiskScope = "medium"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "🔴 Riesgo Alto", _optRiskScope == "high", () => { _optRiskScope = "high"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Todos los riesgos", _optRiskScope == "all", () => { _optRiskScope = "all"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Bajo", _optRiskScope == "low", () => { _optRiskScope = "low"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Medio", _optRiskScope == "medium", () => { _optRiskScope = "medium"; RenderCurrentTab(); });
+            AddFilterButton(filterBar, "Alto", _optRiskScope == "high", () => { _optRiskScope = "high"; RenderCurrentTab(); });
             root.Children.Add(filterBar);
 
             // Filtro por Subcategoría
@@ -2368,7 +3140,7 @@ namespace Blackwall
             foreach (string sc in subcats)
             {
                 string scCopy = sc;
-                AddFilterButton(subcatBar, scCopy == "Todas" ? "📂 Todas las Subcategorías" : scCopy, _tweakSubcategoryScope == scCopy, () =>
+                AddFilterButton(subcatBar, scCopy == "Todas" ? "Todas las categorías" : scCopy, _tweakSubcategoryScope == scCopy, () =>
                 {
                     _tweakSubcategoryScope = scCopy;
                     RenderCurrentTab();
@@ -2405,7 +3177,7 @@ namespace Blackwall
                     var tweaksInSubcat = matchingTweaks.Where(t => (GetStr(t, "subcategory") == sc || (string.IsNullOrEmpty(GetStr(t, "subcategory")) && sc == "General"))).ToList();
                     if (tweaksInSubcat.Count == 0) continue;
 
-                    StackPanel groupSection = new StackPanel { Margin = new Thickness(0, 8, 0, 34) };
+                    StackPanel groupSection = new StackPanel { Margin = new Thickness(0, 8, 0, 22) };
 
                     DockPanel grpHdr = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
                     Border countBadge = new Border
@@ -2428,8 +3200,8 @@ namespace Blackwall
                     StackPanel titleRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     titleRow.Children.Add(new TextBlock
                     {
-                        Text = "⚡ " + sc.ToUpperInvariant(),
-                        Foreground = AccentBrush,
+                        Text = sc,
+                        Foreground = CyberCyanBrush,
                         FontWeight = FontWeights.ExtraBold,
                         FontSize = 14.5
                     });
@@ -2480,6 +3252,7 @@ namespace Blackwall
             string subcat = GetStr(t, "subcategory");
 
             bool isApplied = _tweakStates.ContainsKey(id) && _tweakStates[id];
+            bool stateKnown = _hardware != null && _loadedModules.Contains("tweaks") && _tweakStates.ContainsKey(id);
 
             Border card = CreateCardContainer();
             card.Margin = new Thickness(0, 0, 12, 12);
@@ -2490,56 +3263,16 @@ namespace Blackwall
             // 1. CABECERA: Badges a la izquierda + Switch Toggle Cyberpunk a la derecha
             DockPanel header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
 
-            // Toggle Switch Cyberpunk interactivo
-            Border switchTrack = new Border
-            {
-                Width = 46,
-                Height = 24,
-                CornerRadius = new CornerRadius(12),
-                Background = isApplied ? AccentBrush : BgElevated,
-                BorderBrush = BorderSubtle,
-                BorderThickness = new Thickness(1),
-                Cursor = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            Border switchThumb = new Border
-            {
-                Width = 18,
-                Height = 18,
-                CornerRadius = new CornerRadius(9),
-                Background = Brushes.White,
-                HorizontalAlignment = isApplied ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-                Margin = new Thickness(2)
-            };
-            switchTrack.Child = switchThumb;
-
-            TextBlock switchLabel = new TextBlock
-            {
-                Text = isApplied ? "ON" : "OFF",
-                FontSize = 10.5,
-                FontWeight = FontWeights.ExtraBold,
-                Foreground = isApplied ? AccentBrush : TextSecondary,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(6, 0, 0, 0)
-            };
-
-            StackPanel switchContainer = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                VerticalAlignment = VerticalAlignment.Center,
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(8, 0, 0, 0)
-            };
-            switchContainer.Children.Add(switchTrack);
-            switchContainer.Children.Add(switchLabel);
-
-            DockPanel.SetDock(switchContainer, Dock.Right);
-            header.Children.Add(switchContainer);
+            Button switchButton = CreateStyledButton(isApplied ? "Revertir" : "Aplicar", !isApplied);
+            switchButton.IsEnabled = stateKnown;
+            switchButton.ToolTip = "Cambiar el estado de " + shortTitle;
+            System.Windows.Automation.AutomationProperties.SetName(switchButton, (isApplied ? "Revertir " : "Aplicar ") + shortTitle);
+            DockPanel.SetDock(switchButton, Dock.Right);
+            header.Children.Add(switchButton);
 
             // Badges en la cabecera
             WrapPanel badgesPanel = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
-            string riskText = risk == "low" ? "🟢 SEGURO" : risk == "medium" ? "🟡 PRECAUCIÓN" : "🔴 AVANZADO";
+            string riskText = risk == "low" ? "RIESGO BAJO" : risk == "medium" ? "PRECAUCIÓN" : "RIESGO ALTO";
             Border riskBadge = CreateBadge(riskText, risk);
             riskBadge.Margin = new Thickness(0, 0, 6, 2);
             badgesPanel.Children.Add(riskBadge);
@@ -2555,7 +3288,7 @@ namespace Blackwall
                     VerticalAlignment = VerticalAlignment.Center,
                     Child = new TextBlock
                     {
-                        Text = "⚠️ Afecta: " + affects,
+                        Text = "Afecta: " + affects,
                         Foreground = RiskMedText,
                         FontSize = 10,
                         FontWeight = FontWeights.SemiBold
@@ -2610,9 +3343,13 @@ namespace Blackwall
             sp.Children.Add(summaryText);
 
             // 3. CAJÓN DESPLEGABLE TÉCNICO (DRAWER)
-            TextBlock toggleDrawerBtn = new TextBlock
+            Button toggleDrawerBtn = new Button
             {
-                Text = "Ver detalles técnicos ▾",
+                Content = "Ver efecto y reversión ▾",
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(0, 6, 4, 6),
                 Foreground = CyberCyanBrush,
                 FontSize = 11,
                 FontWeight = FontWeights.SemiBold,
@@ -2672,12 +3409,12 @@ namespace Blackwall
                 };
                 warnBox.Child = new TextBlock
                 {
-                    Text = "⚠️ Precaución Técnica: " + warning,
+                    Text = "Precaución: " + warning,
                     Foreground = RiskMedText,
                     FontSize = 11,
                     TextWrapping = TextWrapping.Wrap
                 };
-                drawerPanel.Children.Add(warnBox);
+                sp.Children.Add(warnBox);
             }
 
             // ID del tweak y tags
@@ -2698,35 +3435,36 @@ namespace Blackwall
             drawerPanel.Children.Add(idBadge);
             sp.Children.Add(drawerPanel);
 
-            toggleDrawerBtn.MouseLeftButtonUp += (s, e) =>
+            drawerPanel.Children.Add(new TextBlock { Text = "Reversión: " + (t.ContainsKey("undoOps") && ConvertToDictList(t["undoOps"]).Count > 0 ? "Revertir ejecuta los valores definidos por el catálogo; puede no recuperar tu configuración anterior exacta." : "este ajuste no declara una reversión automática."), Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
+            bool detailsOpen = false;
+            toggleDrawerBtn.Click += (s, e) =>
             {
-                e.Handled = true;
-                if (drawerPanel.Visibility == Visibility.Visible)
-                {
-                    drawerPanel.Visibility = Visibility.Collapsed;
-                    toggleDrawerBtn.Text = "Ver detalles técnicos ▾";
-                }
-                else
+                detailsOpen = !detailsOpen;
+                toggleDrawerBtn.Content = detailsOpen ? "Ocultar detalles ▴" : "Ver efecto y reversión ▾";
+                drawerPanel.BeginAnimation(FrameworkElement.HeightProperty, null);
+                drawerPanel.Height = double.NaN;
+                if (detailsOpen)
                 {
                     drawerPanel.Visibility = Visibility.Visible;
-                    toggleDrawerBtn.Text = "Ocultar detalles ▴";
+                    drawerPanel.Measure(new Size(Math.Max(160, card.ActualWidth - 36), double.PositiveInfinity));
+                    if (MotionAllowed) drawerPanel.BeginAnimation(FrameworkElement.HeightProperty, new DoubleAnimation(0, drawerPanel.DesiredSize.Height, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
                 }
+                else if (MotionAllowed)
+                {
+                    var close = new DoubleAnimation(drawerPanel.ActualHeight, 0, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop };
+                    close.Completed += (sender, args) => { if (!detailsOpen) drawerPanel.Visibility = Visibility.Collapsed; };
+                    drawerPanel.BeginAnimation(FrameworkElement.HeightProperty, close);
+                }
+                else drawerPanel.Visibility = Visibility.Collapsed;
             };
 
             // 4. PIE DE TARJETA: Estado actual + botón Undo si activo
             DockPanel footer = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
 
-            Button undoBtn = CreateStyledButton("↩ Revertir", false);
-            undoBtn.Padding = new Thickness(8, 3, 8, 3);
-            undoBtn.FontSize = 11;
-            undoBtn.Visibility = isApplied ? Visibility.Visible : Visibility.Collapsed;
-            undoBtn.Click += async (s, e) => await ExecuteTweakAsync(t, false);
-            DockPanel.SetDock(undoBtn, Dock.Right);
-            footer.Children.Add(undoBtn);
-
             TextBlock statusText = new TextBlock
             {
-                Text = isApplied ? "✓ Activo en tu Sistema" : "• Valor de Fábrica",
+                Text = !stateKnown ? "Pendiente de verificar" : isApplied ? "Detectado como activo" : "No detectado como activo",
+                ToolTip = "La detección usa los criterios del catálogo; no demuestra que todas las operaciones se hayan aplicado ni que se conserve tu configuración original.",
                 Foreground = isApplied ? RiskLowText : TextSecondary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 11.5,
@@ -2741,31 +3479,31 @@ namespace Blackwall
             Action<bool> updateCardUi = (bool applied) =>
             {
                 card.BorderBrush = applied ? AccentBrush : BorderSubtle;
-                switchTrack.Background = applied ? AccentBrush : BgElevated;
-                switchThumb.HorizontalAlignment = applied ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-                switchLabel.Text = applied ? "ON" : "OFF";
-                switchLabel.Foreground = applied ? AccentBrush : TextSecondary;
-                statusText.Text = applied ? "✓ Activo en tu Sistema" : "• Valor de Fábrica";
+                switchButton.Content = applied ? "Revertir" : "Aplicar";
+                switchButton.Background = applied ? BgSurface : AccentBrush;
+                switchButton.Foreground = applied ? TextPrimary : Brushes.White;
+                System.Windows.Automation.AutomationProperties.SetName(switchButton, (applied ? "Revertir " : "Aplicar ") + shortTitle);
+                AnimateEntrance(statusText, 2, 180);
+                statusText.Text = applied ? "Detectado como activo" : "No detectado como activo";
                 statusText.Foreground = applied ? RiskLowText : TextSecondary;
-                undoBtn.Visibility = applied ? Visibility.Visible : Visibility.Collapsed;
             };
             _tweakCardUpdaters[id] = updateCardUi;
 
             // Manejador del clic en el Switch Toggle
-            switchContainer.MouseLeftButtonUp += async (s, e) =>
+            switchButton.Click += async (s, e) =>
             {
                 e.Handled = true;
                 bool current = _tweakStates.ContainsKey(id) && _tweakStates[id];
-                switchContainer.IsEnabled = false;
-                switchContainer.Opacity = 0.5;
+                switchButton.IsEnabled = false;
+                switchButton.Opacity = 0.5;
                 try
                 {
                     await ExecuteTweakAsync(t, !current);
                 }
                 finally
                 {
-                    switchContainer.IsEnabled = true;
-                    switchContainer.Opacity = 1.0;
+                    switchButton.IsEnabled = true;
+                    switchButton.Opacity = 1.0;
                 }
             };
 
@@ -2782,7 +3520,8 @@ namespace Blackwall
             StackPanel topBtns = new StackPanel { Orientation = Orientation.Horizontal };
             CheckBox directModeChk = new CheckBox
             {
-                Content = "Forzar Descarga HTTPS Directa (Evita fallos de WinGet en otros PCs)",
+                Content = "HTTPS directo",
+                ToolTip = "Forzar la descarga del instalador oficial por HTTPS en lugar de utilizar WinGet",
                 Foreground = TextPrimary,
                 IsChecked = _preferDirectHttpsDownload,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -2791,18 +3530,19 @@ namespace Blackwall
             directModeChk.Click += (s, e) => _preferDirectHttpsDownload = directModeChk.IsChecked == true;
             topBtns.Children.Add(directModeChk);
 
-            Button upgradeAllBtn = CreateStyledButton("🔄 Actualizar Todas (WinGet)", false);
+            Button upgradeAllBtn = CreateStyledButton("Actualizar todo", false);
+            upgradeAllBtn.ToolTip = "Actualizar todas las aplicaciones mediante WinGet";
             upgradeAllBtn.Margin = new Thickness(0, 0, 8, 0);
             upgradeAllBtn.Click += async (s, e) => await UpgradeAllAppsAsync();
             topBtns.Children.Add(upgradeAllBtn);
 
-            Button installSelectedBtn = CreateStyledButton("🚀 Instalar Seleccionadas (" + _selectedApps.Count + ")", true);
+            Button installSelectedBtn = CreateStyledButton("Instalar seleccionadas (" + _selectedApps.Count + ")", true);
             installSelectedBtn.Click += async (s, e) => await InstallSelectedAppsBatchAsync();
             topBtns.Children.Add(installSelectedBtn);
 
             root.Children.Add(CreateBanner(
-                "📦 Descarga e Instalación 100% Silenciosa (Motor Dual: WinGet Nativo + HTTPS Directo C#)",
-                "Si un PC no tiene WinGet o el antivirus limita scripts, Blackwall descarga el instalador oficial por HTTPS nativo en C# y lo instala en silencio.",
+                "Instalador de software",
+                "Selecciona aplicaciones y despliega sus instaladores mediante WinGet o descarga HTTPS directa.",
                 topBtns
             ));
 
@@ -3014,7 +3754,7 @@ namespace Blackwall
                 Text = initial,
                 FontWeight = FontWeights.Bold,
                 FontSize = 18,
-                Foreground = AccentBrush,
+                Foreground = CyberCyanBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
@@ -3046,7 +3786,7 @@ namespace Blackwall
             titleStack.Children.Add(new TextBlock
             {
                 Text = GetStr(a, "category") + (isInstalled ? "  •  ✓ INSTALADO (" + ver + ")" : ""),
-                Foreground = isInstalled ? RiskLowText : AccentBrush,
+                Foreground = isInstalled ? RiskLowText : CyberCyanBrush,
                 FontSize = 9.8,
                 FontWeight = FontWeights.Bold
             });
@@ -3116,11 +3856,11 @@ namespace Blackwall
         {
             StackPanel root = new StackPanel();
 
-            Button refreshBtn = CreateStyledButton("🔄 Refrescar Procesos Ahora", true);
+            Button refreshBtn = CreateStyledButton("Actualizar procesos", true);
             refreshBtn.Click += async (s, e) => await RefreshLiveScriptsNativeAsync();
 
             root.Children.Add(CreateBanner(
-                "📡 Monitor de Scripts en Vivo (Consola Interna + Procesos Activos en Windows)",
+                "Monitor de procesos",
                 "Detecta en tiempo real powershell.exe, pwsh.exe, cmd.exe, wscript.exe, cscript.exe y mshta.exe mediante consulta WMI nativa.",
                 refreshBtn
             ));
@@ -3224,7 +3964,7 @@ namespace Blackwall
                     {
                         Text = GetStr(p, "commandLine"),
                         Background = Brushes.Transparent,
-                        Foreground = AccentBrush,
+                        Foreground = CyberCyanBrush,
                         BorderThickness = new Thickness(0),
                         IsReadOnly = true,
                         TextWrapping = TextWrapping.Wrap,
@@ -3250,7 +3990,7 @@ namespace Blackwall
         {
             StackPanel root = new StackPanel();
             root.Children.Add(CreateBanner(
-                "🛡️ Módulo de Seguridad, Puntos de Restauración y Reparación del Sistema",
+                "Seguridad y recuperación",
                 "Blackwall utiliza la API WMI nativa root\\default:SystemRestore sin scripts externos."
             ));
 
@@ -3762,21 +4502,23 @@ namespace Blackwall
             Border b = new Border
             {
                 Background = BgSurface,
-                BorderBrush = AccentBrush,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(16, 14, 16, 14),
-                Margin = new Thickness(0, 0, 0, 14)
+                BorderBrush = CyberCyanBrush,
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                CornerRadius = new CornerRadius(0, 0, 16, 0),
+                Padding = new Thickness(22, 20, 20, 20),
+                Margin = new Thickness(0, 0, 0, 24)
             };
             DockPanel dp = new DockPanel();
             if (rightAction != null)
             {
+                FrameworkElement actionElement = rightAction as FrameworkElement;
+                if (actionElement != null) actionElement.VerticalAlignment = VerticalAlignment.Center;
                 DockPanel.SetDock(rightAction, Dock.Right);
                 dp.Children.Add(rightAction);
             }
-            StackPanel sp = new StackPanel();
-            sp.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 15.5 });
-            sp.Children.Add(new TextBlock { Text = subtitle, Foreground = TextSecondary, FontSize = 12.2, Margin = new Thickness(0, 3, 0, 0), TextWrapping = TextWrapping.Wrap });
+            StackPanel sp = new StackPanel { Margin = new Thickness(0, 0, rightAction == null ? 0 : 18, 0) };
+            sp.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 22, TextWrapping = TextWrapping.Wrap });
+            sp.Children.Add(new TextBlock { Text = subtitle, Foreground = TextSecondary, FontSize = 12, LineHeight = 19, Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap });
             dp.Children.Add(sp);
             b.Child = dp;
             return b;
@@ -3784,14 +4526,24 @@ namespace Blackwall
 
         private Border CreateCardContainer()
         {
-            return new Border
+            Border card = new Border
             {
+                Uid = "motion-card",
                 Background = BgSurface,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(15)
+                CornerRadius = new CornerRadius(0, 0, 12, 0),
+                Padding = new Thickness(18)
             };
+            card.MouseEnter += (s, e) =>
+            {
+                if (!MotionAllowed) return;
+                var glow = new System.Windows.Media.Effects.DropShadowEffect { Color = ColorHex("#EF4055"), ShadowDepth = 0, BlurRadius = 22, Opacity = 0 };
+                card.Effect = glow;
+                glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.OpacityProperty, new DoubleAnimation(0, 0.38, TimeSpan.FromMilliseconds(220)));
+            };
+            card.MouseLeave += (s, e) => card.Effect = null;
+            return card;
         }
 
         private UIElement CreateKvCard(string title, string badgeText, string[,] rows)
@@ -3814,9 +4566,11 @@ namespace Blackwall
                 {
                     BorderBrush = BorderSubtle,
                     BorderThickness = new Thickness(0, 0, 0, i == count - 1 ? 0 : 1),
-                    Padding = new Thickness(0, 5, 0, 5)
+                    Padding = new Thickness(0, 8, 0, 8)
                 };
-                DockPanel rdp = new DockPanel();
+                Grid rdp = new Grid();
+                rdp.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42, GridUnitType.Star) });
+                rdp.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58, GridUnitType.Star) });
                 TextBox valBox = new TextBox
                 {
                     Text = rows[i, 1],
@@ -3826,12 +4580,14 @@ namespace Blackwall
                     IsReadOnly = true,
                     FontWeight = FontWeights.SemiBold,
                     FontFamily = new FontFamily("Consolas"),
-                    FontSize = 11.8,
-                    HorizontalAlignment = HorizontalAlignment.Right
+                    FontSize = 11.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Right,
+                    Padding = new Thickness(8, 0, 0, 0)
                 };
-                DockPanel.SetDock(valBox, Dock.Right);
+                Grid.SetColumn(valBox, 1);
                 rdp.Children.Add(valBox);
-                rdp.Children.Add(new TextBlock { Text = rows[i, 0], Foreground = TextSecondary, FontSize = 12 });
+                rdp.Children.Add(new TextBlock { Text = rows[i, 0], Foreground = TextSecondary, FontSize = 11.5, TextWrapping = TextWrapping.Wrap });
                 rowBorder.Child = rdp;
                 sp.Children.Add(rowBorder);
             }
@@ -3847,10 +4603,14 @@ namespace Blackwall
             return new Border
             {
                 Background = bg,
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(8, 2, 8, 2),
+                CornerRadius = new CornerRadius(0, 0, 5, 0),
+                BorderBrush = fg,
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(8, 4, 8, 4),
                 VerticalAlignment = VerticalAlignment.Center,
-                Child = new TextBlock { Text = text, Foreground = fg, FontSize = 10, FontWeight = FontWeights.ExtraBold }
+                ToolTip = text,
+                MaxWidth = 160,
+                Child = new TextBlock { Text = text, Foreground = fg, FontFamily = new FontFamily("Consolas"), FontSize = 10, FontWeight = FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis }
             };
         }
 
@@ -3863,14 +4623,24 @@ namespace Blackwall
                 Foreground = primary ? Brushes.White : TextPrimary,
                 BorderBrush = primary ? AccentBrush : BorderSubtle,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(12, 6, 12, 6),
+                Padding = new Thickness(14, 8, 14, 8),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Cursor = Cursors.Hand
             };
 
+            var pressScale = new ScaleTransform(1, 1);
+            btn.RenderTransformOrigin = new Point(0.5, 0.5);
+            btn.RenderTransform = pressScale;
+            btn.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                if (!MotionAllowed) return;
+                pressScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, 0.97, TimeSpan.FromMilliseconds(90)) { AutoReverse = true, FillBehavior = FillBehavior.Stop });
+                pressScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, 0.97, TimeSpan.FromMilliseconds(90)) { AutoReverse = true, FillBehavior = FillBehavior.Stop });
+            };
             btn.MouseEnter += (s, e) =>
             {
+                if (MotionAllowed) btn.BeginAnimation(OpacityProperty, new DoubleAnimation(0.82, 1, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.Stop });
                 if (!primary)
                 {
                     btn.Background = BgElevated;

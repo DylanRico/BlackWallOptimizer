@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node dev-bridge.mjs",
+    "preview:ui": "node scripts/preview-ui.mjs",
+    "test": "node --test tests/web-ui.test.mjs",
     "tauri:dev": "cargo tauri dev",
     "tauri:build": "cd src-tauri && cargo build --release"
   }

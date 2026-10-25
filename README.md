@@ -1,79 +1,55 @@
-# 🔴 BLACKWALL // CYBERPUNK WINDOWS ARCHITECTURE & ICE PROTOCOL
+# Blackwall — Muro Negro
 
-```
-  ██████╗ ██╗      █████╗  ██████╗██╗  ██╗██╗    ██╗ █████╗ ██╗     ██╗     
-  ██╔══██╗██║     ██╔══██╗██╔════╝██║ ██╔╝██║    ██║██╔══██╗██║     ██║     
-  ██████╔╝██║     ███████║██║     █████╔╝ ██║ █╗ ██║███████║██║     ██║     
-  ██╔══██╗██║     ██╔══██║██║     ██╔═██╗ ██║███╗██║██╔══██║██║     ██║     
-  ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗╚███╔███╔╝██║  ██║███████╗███████╗
-  ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚══════╝
-              [ MILITARY-GRADE ICE PROTOCOL // NETWATCH LEVEL 5 ]
-```
+Suite de escritorio para Windows 10/11 con auditoría de hardware, ajustes de rendimiento y privacidad, catálogo de aplicaciones, monitor de procesos y herramientas de recuperación.
 
-> **BLACKWALL** es una suite de escritorio portable de alto rendimiento, inspirada en la barrera digital de *Cyberpunk 2077*, diseñada para aislar telemetría, erradicar bloatware parásito, auditar hasta el último componente de silicio y desplegar software sin dejar rastro en Windows 10 y 11.
-> 
-> *Construida en arquitectura C# nativa sin scripts lentos de PowerShell. Peso inferior a 1 MB, arranque en <0.35s y 0 falsos positivos en antivirus.*
+El ejecutable portable principal está construido con C# y WPF. El repositorio también contiene una variante Rust/Tauri y una interfaz web con bridge de desarrollo; sus funciones y garantías no son equivalentes.
 
----
+## Documentación vigente
 
-## ⚡ Módulos del Protocolo BLACKWALL
+- [Seguridad de publicación y estado real de OTA](SEGURIDAD-Y-ESTADO-OTA.md).
+- [Animaciones, comprobaciones y ejecutable actual](ANIMACIONES-MURO-NEGRO.md).
+- [Plan visual y criterios de aceptación](PLAN-UX-MURO-NEGRO.md).
+- [Primera entrega del rediseño](ENTREGA-MURO-NEGRO.md), conservada como historial.
+- [Origen y empaquetado del emblema rojo](assets/branding/README.md).
 
-### 1. 🔍 Deep Hardware & Silicon Audit (< 0.35s)
-Inspección profunda mediante llamadas nativas al kernel (WMI/CIM y SMBIOS):
-- **Identificación OEM y Chasis:** Detección automática de Laptop vs. Desktop / Estación de combate. Marca, Modelo exacto, Número de Serie de placa y BIOS.
-- **Placa Base y Seguridad:** UEFI/Legacy, Secure Boot y versión física de TPM (TPM 2.0).
-- **Procesador (CPU):** Arquitectura, Socket, núcleos físicos/hilos, frecuencias Base/Boost, memorias caché L1/L2/L3 y soporte de virtualización.
-- **Memoria RAM Slot-by-Slot:** Desglose módulo por módulo (`Win32_PhysicalMemory`): fabricante, número de parte, serial y canales activos (Dual/Quad Channel).
-- **Almacenamiento NVMe/SSD:** Estado de salud (%), horas de encendido, lectura S.M.A.R.T. y estilo de partición GPT.
-- **Batería y Desgaste (Laptops):** Capacidad de diseño vs. Carga completa, porcentaje exacto de **Wear Level (Desgaste)** y tasa de descarga en tiempo real.
+## Ejecutable e interfaz
 
-### 2. 🛡️ ICE Debloat Barrier (Aislamiento de Telemetría)
-- **Eliminación Quirúrgica:** Purga selectiva de aplicaciones basura preinstaladas (AppX/MSIX), Cortana, Copilot, Widgets y publicidad del menú Inicio.
-- **Semáforo de Riesgo:**
-  - 🟢 **Bajo (Seguro):** Optimización estándar recomendada para todos los equipos.
-  - 🟡 **Medio (Precaución):** Desactiva servicios secundarios opcionales.
-  - 🔴 **Alto (Overdrive):** Modificaciones avanzadas de latencia.
-- **Reversión Total (*Undo*):** Cada tweak puede activarse o deshacerse en caliente.
-- **Punto de Restauración Automático:** Crea un punto de recuperación de Windows antes de tocar el sistema.
+`Blackwall.exe` incorpora el emblema rojo, paleta negra/carmesí, menú contraíble, entradas escalonadas de tarjetas, reflejos en botones, circuitos animados y movimiento reducido. Se abre maximizado respetando el área de trabajo de Windows.
 
-### 3. ⚡ Perfiles de Energía Adaptativos (Laptop vs. Desktop)
-- **Modo Laptop (Cyberware Efficiency):** Gestión térmica optimizada, control de *Modern Standby* y suspensión selectiva sin drenar la batería.
-- **Modo Desktop (Max Overdrive):** Plan *Ultimate Performance*, reducción de latencia de red, HAGS, Game Mode y desactivación de ahorros PCIe/USB.
+La auditoría de hardware puede iniciarse como usuario estándar. Algunas consultas y las acciones de modificación requieren permisos adicionales. Antes de aplicar un ajuste, revisa sus efectos y advertencias. Revertir ejecuta valores del catálogo y puede no recuperar exactamente tu configuración anterior. Un punto de restauración depende de que Windows permita crearlo; su existencia no se debe dar por hecha.
 
-### 4. 📦 Blackwall Package Hub (Instalador Desatendido Dual)
-- Catálogo de software esencial (Brave, Chrome, Firefox, VS Code, Git, Discord, Steam, VLC, PowerToys, etc.).
-- **Iconografía Oficial HD:** Iconos maestros vectoriales y de alta definición integrados en el binario con encuadre Fluent.
-- **Motor Dual Autónomo:** Integración con **WinGet** + descargador directo **HTTPS nativo de C#** con barra de progreso por si el PC no tiene WinGet configurado.
+No se promete un tiempo universal de arranque, compatibilidad con todos los equipos, ausencia de alertas antivirus ni seguridad de producción ya auditada. El binario local de esta entrega no tiene una nueva firma Authenticode de confianza pública.
 
-### 5. 📡 Daemon & Script Monitor en Vivo
-- Detección en tiempo real de motores de scripts en ejecución (`powershell.exe`, `cmd.exe`, `wscript.exe`, `mshta.exe`), exponiendo su PID, ruta, usuario, consumo y su **línea de comandos exacta (`CommandLine`)**, con opción de terminación inmediata (`Kill`).
+## Comprobar y compilar WPF
 
-### 6. 🚀 Actualizaciones Remotas Silenciosas (OTA Zero-Lock)
-- Consulta de manifiesto remoto en GitHub/servidor propio con validación criptográfica **SHA-256**.
-- Actualización en caliente mediante reemplazo de binario (*Zero-Lock technique*).
+Requisitos: Windows, compilador .NET Framework de 64 bits con WPF y Node.js para las pruebas web.
 
----
-
-## 🚀 Despliegue Rápido (Netrunner Quickstart)
-
-1. Descarga el ejecutable: **`Blackwall.exe`** (~946 KB).
-2. Haz clic derecho y selecciona **"Ejecutar como administrador"**.
-3. ¡Listo! 100% portable, no requiere instalación ni paquetes adicionales.
-
----
-
-## 🛠️ Compilación y Desarrollo
-
-```cmd
-:: 1. Compilar y firmar el binario localmente (4 segundos):
-Build-Portable-Exe.bat
-
-:: 2. Publicar una nueva versión OTA para todos los clientes:
-Publish-Release.bat
+```powershell
+./scripts/Test-Ui.ps1
+node scripts/check-publish-safety.mjs --self-test
+node scripts/check-publish-safety.mjs
 ```
 
----
+La compilación comprobada se escribe en `artifacts/Blackwall.preview.exe`; los artefactos y capturas no se suben a Git. El script de comprobación no aplica tweaks ni instala programas. La opción `-ScanHardware` añade consultas reales de hardware de solo lectura.
 
-## 📄 Licencia
+`Build-Portable-Exe.bat` y `Publish-Release.bat` son herramientas históricas que finalizan procesos y pueden crear/usar certificados locales. No deben confundirse con el script de comprobación ni con una publicación OTA ya validada.
 
-Licencia MIT — Desarrollado por Dylan. Libre para uso personal, gaming y despliegues técnicos.
+## Vista previa web con datos sintéticos
+
+```powershell
+npm run preview:ui
+```
+
+Abre `http://127.0.0.1:3848`. Esta vista usa datos de prueba y bloquea las operaciones que modifican el sistema. No comprueba la eficacia de los ajustes sobre Windows ni representa datos reales del equipo.
+
+`npm start` y `Start-Blackwall.bat` utilizan el bridge histórico, que puede ejecutar comandos y cuya ruta OTA simula éxito. No se recomienda ejecutarlo elevado ni exponerlo a la red; consulta los hallazgos de seguridad antes de utilizarlo.
+
+## Estado OTA
+
+**Implementación parcial; pendiente de endurecimiento y prueba completa.** El manifiesto publicado en `main` declara 1.2.0 y su hash coincide con el binario publicado. El árbol local declara 1.3.0, pero su manifiesto no coincide con el ejecutable nuevo. Subir esta revisión a una rama no actualiza automáticamente los equipos.
+
+Faltan, entre otros controles, autenticidad del paquete, validación estricta del manifiesto, coherencia de versiones y recuperación ante fallos. Los detalles, evidencias y criterios de cierre están en [SEGURIDAD-Y-ESTADO-OTA.md](SEGURIDAD-Y-ESTADO-OTA.md).
+
+## Publicación revisable
+
+Los cambios se preparan en una rama de revisión para conservar intactas las URLs OTA que apuntan a `main`. Antes del commit y del push, revisar el índice explícito con el escáner de publicación. El único ejecutable previsto en Git es `Blackwall.exe`; se excluyen respaldos, informes reales, capturas, credenciales y compilaciones temporales.

@@ -14,10 +14,10 @@ const state = {
   selectedApps: new Set(),
   version: null,
   liveScripts: [],
-  restoreInfo: { protectionEnabled: true, points: [] },
+  restoreInfo: { protectionEnabled: null, points: [] },
   consoleLogs: [
-    "[SISTEMA] Blackwall inicializado correctamente en arquitectura multihilo.",
-    "[SEGURIDAD] Guardián de Puntos de Restauración activo antes de modificaciones."
+    "[SISTEMA] Interfaz Blackwall iniciada.",
+    "[SEGURIDAD] Respaldo previo solicitado antes de aplicar optimizaciones."
   ],
   optDeviceFilter: "auto", // auto | laptop | desktop | all
   optRiskFilter: "all",    // all | low | medium | high
@@ -25,21 +25,112 @@ const state = {
   autoRestoreBeforeTweak: true
 };
 
+const pendingRequests = new Map();
+const loadedModules = new Set();
+const operationErrors = new Map();
+const dismissedErrors = new Set();
+const activeOperations = new Map();
+const readOperations = {
+  get_catalogs: { label: "Cargando catálogos", tab: null, retry: loadCatalogs },
+  scan_hardware: { label: "Leyendo hardware · WMI / SMBIOS", tab: "hardware", retry: refreshHardwareAudit },
+  check_all_tweaks: { label: "Verificando Registro y servicios", tab: "optimization", retry: refreshTweaksState },
+  check_installed_apps: { label: "Detectando aplicaciones instaladas", tab: "apps", retry: refreshInstalledApps },
+  get_live_scripts: { label: "Consultando procesos activos", tab: "monitor", retry: refreshLiveScripts },
+  get_restore_points: { label: "Consultando protección del sistema", tab: "safety", retry: refreshRestorePoints }
+};
+let operationSequence = 0;
+let batchProgress = null;
+
 // Puente híbrido: usa Tauri v2 si corre dentro del .exe compilado en Rust, o el bridge nativo local
-async function invokeBackend(cmd, payload = {}) {
-  if (window.__TAURI__ && window.__TAURI__.core) {
-    return await window.__TAURI__.core.invoke(cmd, payload);
+function invokeBackend(cmd, payload = {}) {
+  const operation = readOperations[cmd];
+  if (operation && pendingRequests.has(cmd)) return pendingRequests.get(cmd);
+  dismissedErrors.delete(cmd);
+  const token = ++operationSequence;
+  activeOperations.set(token, operation?.label || "Ejecutando operación solicitada");
+  updateOperationFeedback();
+  const request = (async () => {
+    await Promise.resolve();
+    try {
+      let data;
+      if (window.__TAURI__?.core) {
+        data = await window.__TAURI__.core.invoke(cmd, payload);
+      } else {
+        const res = await fetch(`/api/${cmd}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error((await res.text()) || `Error HTTP ${res.status}`);
+        data = await res.json();
+      }
+      if (data?.success === false) throw new Error(data.stderr || data.stdout || "El sistema informó que la operación falló.");
+      if (cmd === "scan_hardware" && (!data?.chassis || !data?.cpu)) throw new Error("El informe de hardware está incompleto.");
+      if (operation) loadedModules.add(cmd);
+      operationErrors.delete(cmd);
+      return data;
+    } catch (error) {
+      operationErrors.set(cmd, { message: error.message || String(error), operation });
+      throw error;
+    } finally {
+      activeOperations.delete(token);
+      pendingRequests.delete(cmd);
+      updateOperationFeedback();
+    }
+  })();
+  if (operation) pendingRequests.set(cmd, request);
+  return request;
+}
+
+function updateOperationFeedback() {
+  const rail = document.getElementById("operation-rail");
+  if (rail) {
+    rail.classList.toggle("hidden", !activeOperations.size && !batchProgress);
+    document.getElementById("operation-label").textContent = batchProgress?.label || [...activeOperations.values()].join(" · ");
+    document.getElementById("operation-count").textContent = batchProgress ? `${batchProgress.completed}/${batchProgress.total} completadas` : `${activeOperations.size} en curso`;
+    const progress = rail.querySelector("progress");
+    if (batchProgress) {
+      progress.max = batchProgress.total;
+      progress.value = batchProgress.completed;
+    } else {
+      progress.removeAttribute("value");
+    }
   }
-  const res = await fetch(`/api/${cmd}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText || `Error HTTP ${res.status}`);
+  const panel = document.getElementById("error-panel");
+  if (!panel) return;
+  const entry = [...operationErrors.entries()].find(([command, error]) =>
+    !dismissedErrors.has(command) && (!error.operation?.tab || error.operation.tab === state.activeTab ||
+    (error.operation.tab === "optimization" && state.activeTab === "debloat")));
+  panel.classList.toggle("hidden", !entry);
+  if (!entry) return;
+  const [command, error] = entry;
+  document.getElementById("error-title").textContent = error.operation?.label || "La operación no se completó";
+  document.getElementById("error-detail").textContent = `${command} · ${error.message}`;
+  const retry = document.getElementById("btn-error-retry");
+  retry.classList.toggle("hidden", !error.operation);
+  retry.disabled = pendingRequests.has(command);
+  retry.onclick = () => error.operation.retry();
+  document.getElementById("btn-error-dismiss").onclick = () => {
+    dismissedErrors.add(command);
+    updateOperationFeedback();
+  };
+}
+
+function ensureTabData() {
+  const commands = {
+    hardware: ["scan_hardware"], optimization: ["check_all_tweaks"],
+    debloat: ["check_all_tweaks"], apps: ["check_installed_apps"],
+    monitor: ["get_live_scripts"], safety: ["get_restore_points"]
+  };
+  for (const command of commands[state.activeTab] || []) {
+    if (!loadedModules.has(command) && !pendingRequests.has(command) && !operationErrors.has(command)) {
+      readOperations[command].retry();
+    }
   }
-  return await res.json();
+}
+
+function setBatchProgress(label, completed = 0, total = 0) {
+  batchProgress = label && total ? { label, completed, total } : null;
+  updateOperationFeedback();
 }
 
 function appendLog(msg, type = "INFO") {
@@ -61,25 +152,18 @@ function setStatus(text, taskText = "Sin tareas en cola") {
 
 // Inicialización general
 window.addEventListener("DOMContentLoaded", async () => {
+  setupVisualPreferences();
   setupNavigation();
   setupThemeToggle();
   setupOmnibox();
   setupModalsAndQuickButtons();
 
-  await loadCatalogs();
   renderActiveTab();
-
-  // Ejecutar escaneos reales en paralelo sin bloquear la UI
-  Promise.all([
-    refreshHardwareAudit(),
-    refreshTweaksState(),
-    refreshInstalledApps(),
-    refreshLiveScripts(),
-    refreshRestorePoints()
-  ]);
+  loadCatalogs();
+  ensureTabData();
 
   setInterval(() => {
-    if (state.activeTab === "monitor") {
+    if (state.activeTab === "monitor" && !document.hidden && !operationErrors.has("get_live_scripts")) {
       refreshLiveScripts();
     }
   }, 4000);
@@ -98,6 +182,11 @@ async function loadCatalogs() {
     document.getElementById("badge-debloat-count").textContent =
       state.tweaks.filter(t => t.category === "debloat").length;
     document.getElementById("badge-apps-count").textContent = state.apps.length;
+    if (state.version?.appVersion) {
+      document.getElementById("app-version").textContent = `v${state.version.appVersion} / PORTABLE`;
+      document.getElementById("btn-ota-check").textContent = "Actualizaciones";
+    }
+    renderActiveTab();
   } catch (err) {
     appendLog(`Error cargando catálogos: ${err.message}`, "ERROR");
   }
@@ -153,7 +242,7 @@ async function refreshRestorePoints() {
 }
 
 async function refreshHardwareAudit() {
-  setStatus("🔍 Escaneando hardware (WMI / SMBIOS / S.M.A.R.T. / Batería)...", "Auditoría en curso...");
+  setStatus(" Escaneando hardware (WMI / SMBIOS / S.M.A.R.T. / Batería)...", "Auditoría en curso...");
   appendLog("Iniciando escaneo profundo de hardware mediante CIM/WMI/SMBIOS...");
   try {
     const hw = await invokeBackend("scan_hardware");
@@ -161,17 +250,17 @@ async function refreshHardwareAudit() {
     const pill = document.getElementById("device-badge-pill");
     if (pill && hw && hw.chassis) {
       pill.textContent = hw.chassis.isLaptop
-        ? `💻 Laptop: ${hw.chassis.manufacturer} ${hw.chassis.model}`
-        : `🖥️ Desktop: ${hw.chassis.manufacturer} ${hw.chassis.model}`;
+        ? ` Laptop: ${hw.chassis.manufacturer} ${hw.chassis.model}`
+        : ` Desktop: ${hw.chassis.manufacturer} ${hw.chassis.model}`;
     }
     appendLog(`Auditoría completada: ${hw.chassis.deviceType} (${hw.cpu.name})`);
-    setStatus("🟢 Hardware auditado en tiempo real", "Listo");
-    if (state.activeTab === "hardware" || state.activeTab === "optimization") {
+    setStatus(" Hardware auditado en tiempo real", "Listo");
+    if (["hardware", "optimization", "debloat"].includes(state.activeTab)) {
       renderActiveTab();
     }
   } catch (err) {
     appendLog(`Error en auditoría de hardware: ${err.message}`, "ERROR");
-    setStatus("🟡 Error parcial en consulta WMI", "Listo");
+    setStatus(" Error parcial en consulta WMI", "Listo");
   }
 }
 
@@ -197,19 +286,12 @@ async function refreshLiveScripts() {
 function setupNavigation() {
   document.querySelectorAll(".nav-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.activeTab = btn.dataset.tab;
-      renderActiveTab();
+      switchTab(btn.dataset.tab);
     });
   });
 
   document.getElementById("btn-jump-console").addEventListener("click", () => {
-    document.querySelectorAll(".nav-btn").forEach(b => {
-      b.classList.toggle("active", b.dataset.tab === "monitor");
-    });
-    state.activeTab = "monitor";
-    renderActiveTab();
+    switchTab("monitor");
   });
 }
 
@@ -218,8 +300,143 @@ function setupThemeToggle() {
   btn.addEventListener("click", () => {
     state.theme = state.theme === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", state.theme);
-    btn.textContent = state.theme === "dark" ? "☀️ Modo Claro" : "🌙 Modo Oscuro";
+    btn.textContent = state.theme === "dark" ? "Modo claro" : "Modo oscuro";
+    saveVisualPreferences();
   });
+}
+
+const visualPreferences = { sidebarCollapsed: false, reduceMotion: false };
+let pageAnimation, sidebarAnimation;
+let cardObserver;
+const cardAnimations = new Set();
+
+function revealCards() {
+  cardObserver?.disconnect();
+  for (const animation of cardAnimations) animation.cancel();
+  cardAnimations.clear();
+  if (!motionAllowed()) return;
+  const cards = document.querySelectorAll("#main-view .card, #main-view .device-banner");
+  const reveal = (card, index) => {
+    const animation = card.animate?.([
+      { opacity: 0, transform: "perspective(1000px) translateY(32px) rotateX(5deg) scale(.985)" },
+      { opacity: 1, transform: "perspective(1000px) translateY(-2px) rotateX(0) scale(1)", offset: .8 },
+      { opacity: 1, transform: "none" }
+    ], { duration: 540, delay: Math.min(index * 45, 360), easing: "cubic-bezier(.16,1,.3,1)", fill: "backwards" });
+    if (animation) {
+      cardAnimations.add(animation);
+      animation.finished?.then(() => cardAnimations.delete(animation), () => cardAnimations.delete(animation));
+    }
+  };
+  if (typeof IntersectionObserver === "undefined") { cards.forEach(reveal); return; }
+  cardObserver = new IntersectionObserver(entries => {
+    let index = 0;
+    for (const entry of entries) if (entry.isIntersecting) {
+      reveal(entry.target, index++);
+      cardObserver.unobserve(entry.target);
+    }
+  }, { root: document.getElementById("main-view"), threshold: .08 });
+  cards.forEach(card => cardObserver.observe(card));
+}
+function motionAllowed() {
+  return !visualPreferences.reduceMotion && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
+function saveVisualPreferences() {
+  try { localStorage.setItem("blackwall-ui", JSON.stringify({ ...visualPreferences, theme: state.theme })); }
+  catch { /* The current session remains usable when storage is unavailable. */ }
+}
+
+function applyVisualPreferences() {
+  const root = document.documentElement;
+  root.setAttribute("data-sidebar", visualPreferences.sidebarCollapsed ? "compact" : "expanded");
+  root.setAttribute("data-motion", visualPreferences.reduceMotion ? "reduced" : "full");
+  root.setAttribute("data-theme", state.theme);
+  const menu = document.getElementById("btn-sidebar-toggle");
+  menu.setAttribute("aria-expanded", String(!visualPreferences.sidebarCollapsed));
+  menu.setAttribute("aria-label", visualPreferences.sidebarCollapsed ? "Expandir menú" : "Contraer menú");
+  menu.title = visualPreferences.sidebarCollapsed ? "Expandir menú" : "Contraer menú";
+  const motion = document.getElementById("btn-motion-toggle");
+  motion.textContent = visualPreferences.sidebarCollapsed ? "≈" : (visualPreferences.reduceMotion ? "Movimiento reducido" : "Animaciones activas");
+  motion.setAttribute("aria-pressed", String(visualPreferences.reduceMotion));
+  motion.title = visualPreferences.reduceMotion ? "Activar animaciones" : "Reducir movimiento";
+  motion.setAttribute("aria-label", motion.title);
+  document.getElementById("btn-theme-toggle").textContent = state.theme === "dark" ? "Modo claro" : "Modo oscuro";
+  if (!motionAllowed()) {
+    pageAnimation?.cancel(); sidebarAnimation?.cancel();
+    cardObserver?.disconnect();
+    for (const animation of cardAnimations) animation.cancel();
+    cardAnimations.clear();
+  }
+}
+
+function setupVisualPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("blackwall-ui"));
+    if (saved && typeof saved === "object") {
+      visualPreferences.sidebarCollapsed = saved.sidebarCollapsed === true;
+      visualPreferences.reduceMotion = saved.reduceMotion === true;
+      state.theme = saved.theme === "light" ? "light" : "dark";
+    }
+  } catch { /* Ignore corrupt or unavailable preferences. */ }
+  applyVisualPreferences();
+  document.getElementById("btn-sidebar-toggle").addEventListener("click", () => {
+    visualPreferences.sidebarCollapsed = !visualPreferences.sidebarCollapsed;
+    applyVisualPreferences();
+    saveVisualPreferences();
+    const sidebar = document.querySelector(".sidebar");
+    sidebarAnimation?.cancel();
+    if (motionAllowed()) sidebarAnimation = sidebar.animate?.([{ opacity: 0.65, transform: "translateY(6px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "ease-out" });
+  });
+  document.getElementById("btn-motion-toggle").addEventListener("click", () => {
+    visualPreferences.reduceMotion = !visualPreferences.reduceMotion;
+    applyVisualPreferences();
+    saveVisualPreferences();
+  });
+  const updateActivity = () => document.documentElement.setAttribute("data-active", String(!document.hidden && document.hasFocus()));
+  document.addEventListener("visibilitychange", updateActivity);
+  window.addEventListener("focus", updateActivity);
+  window.addEventListener("blur", updateActivity);
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener("change", applyVisualPreferences);
+  updateActivity();
+  document.addEventListener("pointermove", event => {
+    if (!motionAllowed()) return;
+    const button = event.target.closest?.(".btn, .nav-btn");
+    if (!button || button.disabled) return;
+    const bounds = button.getBoundingClientRect();
+    button.style.setProperty("--pointer-x", `${((event.clientX - bounds.left) / bounds.width - .5) * 4}px`);
+    button.style.setProperty("--pointer-y", `${((event.clientY - bounds.top) / bounds.height - .5) * 4}px`);
+  });
+  document.querySelectorAll(".main-content, .sidebar, .omnibox-dropdown").forEach(setupSmoothScroll);
+  document.querySelectorAll(".nav-btn").forEach(button => {
+    button.title = button.querySelector(".nav-label").textContent;
+    button.setAttribute("aria-label", button.title);
+  });
+}
+
+function setupSmoothScroll(element) {
+  let frame = 0, target = 0;
+  const cancel = () => { cancelAnimationFrame(frame); frame = 0; };
+  element.addEventListener("wheel", event => {
+    if (!motionAllowed() || event.ctrlKey || event.shiftKey || event.deltaX || element.scrollHeight <= element.clientHeight) { cancel(); return; }
+    const from = element.scrollTop;
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1);
+    const origin = frame && delta * (target - from) >= 0 ? target : from;
+    target = Math.max(0, Math.min(element.scrollHeight - element.clientHeight, origin + delta));
+    cancel();
+    if (target === from) return;
+    event.preventDefault();
+    const start = performance.now();
+    const tick = now => {
+      if (!motionAllowed()) { element.scrollTop = target; frame = 0; return; }
+      const t = Math.min(1, (now - start) / 260);
+      element.scrollTop = from + (target - from) * (1 - Math.pow(1 - t, 3));
+      frame = t < 1 ? requestAnimationFrame(tick) : 0;
+    };
+    frame = requestAnimationFrame(tick);
+  }, { passive: false });
+  element.addEventListener("pointerdown", cancel);
+  element.addEventListener("keydown", cancel);
+  element.addEventListener("scrollcancel", cancel);
 }
 
 // ============================================================================
@@ -310,7 +527,7 @@ function searchGlobalIndex(q) {
       results.push({
         title: t.title,
         subtitle: `${t.subcategory} — ${t.description.slice(0, 85)}...`,
-        badge: t.riskLevel === "low" ? "🟢 Bajo" : t.riskLevel === "medium" ? "🟡 Medio" : "🔴 Alto",
+        badge: t.riskLevel === "low" ? " Bajo" : t.riskLevel === "medium" ? " Medio" : " Alto",
         badgeClass: `risk-${t.riskLevel}`,
         onSelect: () => {
           switchTab(t.category === "optimization" ? "optimization" : "debloat");
@@ -328,7 +545,7 @@ function searchGlobalIndex(q) {
     if (hay.includes(q)) {
       const inst = state.installedApps[a.id]?.installed;
       results.push({
-        title: `📦 ${a.name}`,
+        title: ` ${a.name}`,
         subtitle: `${a.category} • WinGet ID: ${a.wingetId}`,
         badge: inst ? "✓ Instalado" : "Instalar",
         badgeClass: inst ? "risk-low" : "risk-medium",
@@ -344,11 +561,19 @@ function searchGlobalIndex(q) {
 }
 
 function switchTab(tabName) {
+  const changed = state.activeTab !== tabName;
   state.activeTab = tabName;
   document.querySelectorAll(".nav-btn").forEach(b => {
     b.classList.toggle("active", b.dataset.tab === tabName);
+    b.setAttribute("aria-current", b.dataset.tab === tabName ? "page" : "false");
   });
   renderActiveTab();
+  ensureTabData();
+  document.getElementById("main-view").scrollTop = 0;
+  const main = document.getElementById("main-view");
+  main.dispatchEvent?.(new Event("scrollcancel"));
+  pageAnimation?.cancel();
+  if (changed && motionAllowed()) pageAnimation = main.animate?.([{ opacity: 0.55, transform: "translateY(18px)" }, { opacity: 1, transform: "none" }], { duration: 360, easing: "cubic-bezier(.16,1,.3,1)" });
 }
 
 // ============================================================================
@@ -383,6 +608,18 @@ function renderActiveTab() {
       bindSafetyEvents();
       break;
   }
+  const modules = {
+    hardware: ["01", "Auditoría de hardware", "Conoce cada componente de tu sistema."],
+    optimization: ["02", "Rendimiento adaptativo", "Control preciso sobre energía, latencia y servicios."],
+    debloat: ["03", "Privacidad y debloat", "Elige qué se ejecuta y qué permanece en tu equipo."],
+    apps: ["04", "Centro de software", "Tu catálogo de herramientas, en un solo lugar."],
+    monitor: ["05", "Monitor de procesos", "Observa las tareas activas y consulta el registro de actividad."],
+    safety: ["06", "Protección del sistema", "Verifica tus opciones de recuperación antes de modificar Windows."]
+  };
+  const [number, title, description] = modules[state.activeTab];
+  main.insertAdjacentHTML("afterbegin", `<div class="module-heading"><div><h1>${title}</h1><p>${description}</p></div><span class="module-number" aria-hidden="true">${number}</span></div>`);
+  updateOperationFeedback();
+  revealCards();
 }
 
 // ----------------------------------------------------------------------------
@@ -393,10 +630,13 @@ function renderHardwareView() {
     return `
       <div class="device-banner">
         <div>
-          <div class="device-banner-title">🔍 Ejecutando Auditoría Profunda del Dispositivo...</div>
-          <div class="device-banner-meta">Consultando WMI, tablas SMBIOS, S.M.A.R.T. NVMe/SSD, slots físicos de RAM y desgaste de batería...</div>
+          <div class="eyebrow">HARDWARE / DIAGNÓSTICO</div>
+          <div class="device-banner-title">${operationErrors.has("scan_hardware") ? "No se pudo completar la auditoría" : "Conectando con tu equipo"}</div>
+          <div class="device-banner-meta">${operationErrors.has("scan_hardware") ? "Consulta el detalle del error y vuelve a intentarlo." : "Leyendo información de componentes. Puedes explorar los demás módulos mientras termina."}</div>
         </div>
+        ${operationErrors.has("scan_hardware") ? '<button id="btn-rescan-hw" class="btn btn-primary">Reintentar auditoría ↻</button>' : ""}
       </div>
+      <div class="grid-3" aria-hidden="true">${["PROCESADOR", "MEMORIA", "ALMACENAMIENTO"].map(label => `<div class="card skeleton-card"><span class="eyebrow">${label}</span><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>`).join("")}</div>
     `;
   }
 
@@ -407,7 +647,7 @@ function renderHardwareView() {
     <div class="device-banner">
       <div>
         <div class="device-banner-title">
-          ${isLap ? "💻" : "🖥️"} ${escapeHtml(hw.chassis.manufacturer)} ${escapeHtml(hw.chassis.model)}
+          ${escapeHtml(hw.chassis.manufacturer)} ${escapeHtml(hw.chassis.model)}
           <span class="risk-badge risk-low">${escapeHtml(hw.chassis.deviceType)}</span>
         </div>
         <div class="device-banner-meta">
@@ -415,17 +655,17 @@ function renderHardwareView() {
         </div>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button id="btn-rescan-hw" class="btn btn-sm">🔄 Re-escanear</button>
-        <button id="btn-export-json" class="btn btn-sm">📄 Exportar JSON</button>
-        <button id="btn-export-txt" class="btn btn-sm">📝 Exportar TXT</button>
-        <button id="btn-export-html" class="btn btn-primary btn-sm">🌐 Exportar Reporte HTML</button>
+        <button id="btn-rescan-hw" class="btn btn-sm"> Re-escanear</button>
+        <button id="btn-export-json" class="btn btn-sm"> Exportar JSON</button>
+        <button id="btn-export-txt" class="btn btn-sm"> Exportar TXT</button>
+        <button id="btn-export-html" class="btn btn-primary btn-sm"> Exportar Reporte HTML</button>
       </div>
     </div>
 
     <div class="grid-3">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🏷️ 1. Identificación OEM y Chasis</div>
+          <div class="card-title"> 1. Identificación OEM y Chasis</div>
           <span class="risk-badge risk-low">SMBIOS</span>
         </div>
         <div class="kv-list">
@@ -440,7 +680,7 @@ function renderHardwareView() {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🔌 2. Placa Base, BIOS y TPM</div>
+          <div class="card-title"> 2. Placa Base, BIOS y TPM</div>
           <span class="risk-badge risk-low">${escapeHtml(hw.motherboard.bootMode)}</span>
         </div>
         <div class="kv-list">
@@ -455,7 +695,7 @@ function renderHardwareView() {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🧠 3. Procesador (CPU)</div>
+          <div class="card-title"> 3. Procesador (CPU)</div>
           <span class="risk-badge risk-low">Uso: ${hw.cpu.loadPercent}%</span>
         </div>
         <div class="kv-list">
@@ -472,7 +712,7 @@ function renderHardwareView() {
     <div class="card">
       <div class="card-header">
         <div>
-          <div class="card-title">⚡ 4. Memoria RAM — Resumen General y Desglose por Slot Físico (${hw.memory.occupiedSlots} de ${hw.memory.totalSlots} Slots Ocupados)</div>
+          <div class="card-title"> 4. Memoria RAM — Resumen General y Desglose por Slot Físico (${hw.memory.occupiedSlots} de ${hw.memory.totalSlots} Slots Ocupados)</div>
           <div class="card-desc">Total Instalado: <b>${hw.memory.totalGb} GB ${escapeHtml(hw.memory.memoryType)} @ ${hw.memory.speedMhz} MHz</b> • Modo: <b>${escapeHtml(hw.memory.channelMode)}</b> • En uso: <b>${hw.memory.usedGb} GB (${hw.memory.usagePercent}%)</b></div>
         </div>
         <span class="risk-badge risk-low">${escapeHtml(hw.memory.channelMode)}</span>
@@ -482,7 +722,7 @@ function renderHardwareView() {
         ${hw.memory.slots.map(s => `
           <div class="slot-card ${s.occupied ? '' : 'empty'}">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-              <span style="font-weight:700; font-size:13px;">📍 ${escapeHtml(s.slotName)} (${escapeHtml(s.bankLabel)})</span>
+              <span style="font-weight:700; font-size:13px;"> ${escapeHtml(s.slotName)} (${escapeHtml(s.bankLabel)})</span>
               <span class="risk-badge ${s.occupied ? 'risk-low' : 'risk-medium'}">${s.occupied ? `${s.capacityGb} GB ${s.memType} @ ${s.speedMhz} MHz` : 'SLOT VACÍO'}</span>
             </div>
             ${s.occupied ? `
@@ -501,7 +741,7 @@ function renderHardwareView() {
     <div class="grid-3">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">💿 5. Almacenamiento &amp; S.M.A.R.T.</div>
+          <div class="card-title"> 5. Almacenamiento &amp; S.M.A.R.T.</div>
           <span class="risk-badge risk-low">${hw.storage.length} Unidad(es)</span>
         </div>
         ${hw.storage.map(d => `
@@ -517,7 +757,7 @@ function renderHardwareView() {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🎮 6. Tarjeta Gráfica y Pantalla</div>
+          <div class="card-title"> 6. Tarjeta Gráfica y Pantalla</div>
           <span class="risk-badge risk-low">DXGI / WMI</span>
         </div>
         ${hw.gpus.map(g => `
@@ -533,7 +773,7 @@ function renderHardwareView() {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🔋 7. Batería y Nivel de Desgaste</div>
+          <div class="card-title"> 7. Batería y Nivel de Desgaste</div>
           <span class="risk-badge ${hw.battery.wearLevelPercent < 20 ? 'risk-low' : 'risk-medium'}">
             ${hw.battery.present ? `Salud: ${hw.battery.healthPercent}%` : 'PC Escritorio'}
           </span>
@@ -551,7 +791,7 @@ function renderHardwareView() {
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">🌐 8. Sistema Operativo Windows y Adaptadores de Red</div>
+        <div class="card-title"> 8. Sistema Operativo Windows y Adaptadores de Red</div>
         <span class="risk-badge risk-low">${escapeHtml(hw.osNetwork.caption)} (${escapeHtml(hw.osNetwork.displayVersion)} • Build ${escapeHtml(hw.osNetwork.buildNumber)})</span>
       </div>
       <div class="grid-2">
@@ -648,7 +888,7 @@ function renderTweaksView(categoryType) {
   const isLap = state.hardware ? state.hardware.chassis.isLaptop : true;
   const effectiveDeviceScope =
     state.optDeviceFilter === "auto"
-      ? (isLap ? "laptop" : "desktop")
+      ? (state.hardware ? (isLap ? "laptop" : "desktop") : "all")
       : state.optDeviceFilter;
 
   const list = state.tweaks.filter(t => {
@@ -659,8 +899,8 @@ function renderTweaksView(categoryType) {
   });
 
   const title = categoryType === "optimization"
-    ? "🚀 Optimización de Rendimiento y Energía (Adaptada a Laptop / Desktop)"
-    : "🧹 Debloat Multi-Versión (Windows 10 y Windows 11) & Privacidad";
+    ? " Optimización de Rendimiento y Energía (Adaptada a Laptop / Desktop)"
+    : " Debloat Multi-Versión (Windows 10 y Windows 11) & Privacidad";
 
   return `
     <div class="device-banner">
@@ -671,24 +911,24 @@ function renderTweaksView(categoryType) {
         </div>
       </div>
       <div style="display:flex; gap:8px;">
-        <button id="btn-recheck-tweaks" class="btn btn-sm">🔍 Re-evaluar Estados</button>
-        <button id="btn-apply-recommended-profile" class="btn btn-primary btn-sm">
-          ⚡ Aplicar Perfil Seguro (${isLap ? "Laptop" : "Desktop"})
+        <button id="btn-recheck-tweaks" class="btn btn-sm"> Re-evaluar Estados</button>
+        <button id="btn-apply-recommended-profile" class="btn btn-primary btn-sm" ${!state.hardware || !loadedModules.has("check_all_tweaks") || !loadedModules.has("get_catalogs") ? 'disabled title="Espera la verificación del hardware, los catálogos y los estados"' : ""}>
+           Aplicar Perfil Seguro (${state.hardware ? (isLap ? "Laptop" : "Desktop") : "Esperando hardware"})
         </button>
       </div>
     </div>
 
     <div class="filter-bar">
       <span style="font-size:12px; color:var(--text-secondary); font-weight:600;">Perfil de Equipo:</span>
-      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'laptop' ? 'btn-primary' : ''}" data-scope="laptop">💻 Enfoque Laptop (Batería/Térmico)</button>
-      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'desktop' ? 'btn-primary' : ''}" data-scope="desktop">🖥️ Enfoque Desktop (Máxima Potencia)</button>
-      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'all' ? 'btn-primary' : ''}" data-scope="all">🌐 Mostrar Todos</button>
+      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'laptop' ? 'btn-primary' : ''}" data-scope="laptop"> Enfoque Laptop (Batería/Térmico)</button>
+      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'desktop' ? 'btn-primary' : ''}" data-scope="desktop"> Enfoque Desktop (Máxima Potencia)</button>
+      <button class="btn btn-sm dev-scope-btn ${effectiveDeviceScope === 'all' ? 'btn-primary' : ''}" data-scope="all"> Mostrar Todos</button>
 
       <span style="font-size:12px; color:var(--text-secondary); font-weight:600; margin-left:12px;">Semáforo de Riesgo:</span>
       <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'all' ? 'btn-primary' : ''}" data-risk="all">Todos</button>
-      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'low' ? 'btn-primary' : ''}" data-risk="low">🟢 Riesgo Bajo</button>
-      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'medium' ? 'btn-primary' : ''}" data-risk="medium">🟡 Riesgo Medio</button>
-      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'high' ? 'btn-primary' : ''}" data-risk="high">🔴 Riesgo Alto</button>
+      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'low' ? 'btn-primary' : ''}" data-risk="low"> Riesgo Bajo</button>
+      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'medium' ? 'btn-primary' : ''}" data-risk="medium"> Riesgo Medio</button>
+      <button class="btn btn-sm risk-filter-btn ${state.optRiskFilter === 'high' ? 'btn-primary' : ''}" data-risk="high"> Riesgo Alto</button>
     </div>
 
     <div class="grid-2">
@@ -700,11 +940,12 @@ function renderTweaksView(categoryType) {
 function renderTweakCard(t) {
   const riskLabel =
     t.riskLevel === "low"
-      ? "🟢 Riesgo Bajo (Seguro)"
+      ? "Riesgo bajo"
       : t.riskLevel === "medium"
-      ? "🟡 Riesgo Medio (Precaución)"
-      : "🔴 Riesgo Alto (Avanzado)";
+      ? "Precaución"
+      : "Riesgo alto";
 
+  const verified = loadedModules.has("get_catalogs") && loadedModules.has("check_all_tweaks") && !!state.hardware;
   const isApplied = !!state.tweakStates[t.id];
 
   return `
@@ -712,12 +953,16 @@ function renderTweakCard(t) {
       <div class="card-header">
         <div>
           <span style="font-size:11px; color:var(--accent); font-weight:700; text-transform:uppercase;">${escapeHtml(t.subcategory)}</span>
-          <div class="card-title" style="margin-top:2px;">${escapeHtml(t.title)}</div>
+          <div class="card-title" style="margin-top:2px;">${escapeHtml(t.shortTitle || t.title)}</div>
         </div>
         <span class="risk-badge risk-${t.riskLevel}">${riskLabel}</span>
       </div>
 
-      <div class="card-desc">${escapeHtml(t.description)}</div>
+      <div class="card-desc">${escapeHtml(t.summary || t.description)}</div>
+      ${t.affects ? `<p class="card-impact">Afecta: ${escapeHtml(t.affects)}</p>` : ""}
+      <details class="tweak-details"><summary>Ver efecto y reversión</summary><div class="detail-content">
+        <p>${escapeHtml(t.description)}</p>
+        <p>Reversión: ${t.undoOps?.length ? "Revertir ejecuta los valores definidos por el catálogo; puede no recuperar tu configuración anterior exacta." : "Este ajuste no declara una reversión automática."}</p>
 
       ${t.benefits && t.benefits.length ? `
         <div style="font-size:12px; color:var(--risk-low-text); display:flex; flex-direction:column; gap:3px;">
@@ -725,17 +970,18 @@ function renderTweakCard(t) {
         </div>
       ` : ""}
 
+      </div></details>
       ${t.riskWarning ? `
-        <div class="warning-box">⚠️ <b>Impacto:</b> ${escapeHtml(t.riskWarning)}</div>
+        <div class="warning-box"> <b>Impacto:</b> ${escapeHtml(t.riskWarning)}</div>
       ` : ""}
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto; padding-top:8px; border-top:1px solid var(--border-subtle);">
         <span style="font-size:11.5px; color:var(--text-secondary);">
-          Estado en tu PC: <b style="color:${isApplied ? 'var(--risk-low-text)' : 'var(--text-primary)'}">${isApplied ? "Activo en el Sistema ✓" : "Valor de Fábrica"}</b>
+          Estado en tu PC: <b style="color:${isApplied ? 'var(--risk-low-text)' : 'var(--text-primary)'}">${!verified ? "Pendiente de verificar" : isApplied ? "Activo en el Sistema ✓" : "Sin aplicar (verificado)"}</b>
         </span>
         <div style="display:flex; gap:8px;">
-          <button class="btn btn-sm btn-undo-tweak" data-id="${t.id}">↩️ Revertir (Undo)</button>
-          <button class="btn btn-primary btn-sm btn-apply-tweak" data-id="${t.id}">⚡ Aplicar Tweak</button>
+          <button class="btn btn-sm btn-undo-tweak" data-id="${t.id}" ${!verified ? "disabled" : ""}> Revertir</button>
+          <button class="btn btn-primary btn-sm btn-apply-tweak" data-id="${t.id}" ${!verified ? "disabled" : ""}> Aplicar</button>
         </div>
       </div>
     </div>
@@ -746,9 +992,9 @@ function bindTweaksEvents() {
   const btnRecheck = document.getElementById("btn-recheck-tweaks");
   if (btnRecheck) {
     btnRecheck.addEventListener("click", async () => {
-      setStatus("🔍 Comprobando estado actual de tweaks en el Registro y Servicios...", "check_all_tweaks");
+      setStatus(" Comprobando estado actual de tweaks en el Registro y Servicios...", "check_all_tweaks");
       await refreshTweaksState();
-      setStatus("🟢 Estados de tweaks sincronizados con el sistema", "Listo");
+      setStatus(" Estados de tweaks sincronizados con el sistema", "Listo");
     });
   }
 
@@ -785,16 +1031,27 @@ function bindTweaksEvents() {
   const btnProfile = document.getElementById("btn-apply-recommended-profile");
   if (btnProfile) {
     btnProfile.addEventListener("click", async () => {
+      if (!state.hardware || !loadedModules.has("get_catalogs") || !loadedModules.has("check_all_tweaks")) return;
       const isLap = state.hardware ? state.hardware.chassis.isLaptop : true;
       const scope = isLap ? "laptop" : "desktop";
       const safeTweaks = state.tweaks.filter(t => t.riskLevel === "low" && t.deviceScope.includes(scope));
-      setStatus(`🛡️ Creando Punto de Restauración antes de aplicar ${safeTweaks.length} tweaks...`, "Ejecutando lote...");
-      await invokeBackend("create_restore_point", { description: `Blackwall Auto-Backup (${scope.toUpperCase()})` });
-      for (const tw of safeTweaks) {
-        await runTweakOperation(tw, "apply", true);
+      if (batchProgress) return;
+      setBatchProgress("Aplicando perfil de rendimiento", 0, safeTweaks.length);
+      try {
+        setStatus(` Creando Punto de Restauración antes de aplicar ${safeTweaks.length} tweaks...`, "Ejecutando lote...");
+        await invokeBackend("create_restore_point", { description: `Blackwall Auto-Backup (${scope.toUpperCase()})` });
+        for (let i = 0; i < safeTweaks.length; i++) {
+          if (!await runTweakOperation(safeTweaks[i], "apply", true)) return;
+          setBatchProgress("Aplicando perfil de rendimiento", i + 1, safeTweaks.length);
+        }
+        await refreshTweaksState();
+        setStatus(` Perfil ${scope.toUpperCase()} aplicado con éxito`, "Completado");
+      } catch (err) {
+        appendLog(`Perfil interrumpido: ${err.message}`, "ERROR");
+        setStatus("Perfil interrumpido; revisa el aviso", "Error");
+      } finally {
+        setBatchProgress(null);
       }
-      await refreshTweaksState();
-      setStatus(`🟢 Perfil ${scope.toUpperCase()} aplicado con éxito`, "Completado");
       renderActiveTab();
     });
   }
@@ -805,11 +1062,11 @@ async function runTweakOperation(tweak, mode, skipRestorePoint = false) {
   const cmds = isApply ? tweak.apply : tweak.undo;
   try {
     if (isApply && state.autoRestoreBeforeTweak && !skipRestorePoint) {
-      setStatus("🛡️ Verificando Punto de Restauración previo...", tweak.title);
+      setStatus(" Verificando Punto de Restauración previo...", tweak.title);
       appendLog(`Creando punto de restauración preventivo antes de: ${tweak.title}`);
       await invokeBackend("create_restore_point", { description: `Blackwall Pre-${tweak.id}` });
     }
-    setStatus(`⚙️ ${isApply ? "Aplicando" : "Revirtiendo"}: ${tweak.title}...`, "Ejecutando PowerShell/Reg...");
+    setStatus(` ${isApply ? "Aplicando" : "Revirtiendo"}: ${tweak.title}...`, "Ejecutando PowerShell/Reg...");
     appendLog(`${isApply ? "[APPLY]" : "[UNDO]"} ${tweak.title} -> ${cmds.join(" ; ")}`);
 
     const res = await invokeBackend("execute_tweak_commands", { commands: cmds });
@@ -817,11 +1074,13 @@ async function runTweakOperation(tweak, mode, skipRestorePoint = false) {
     if (res.stdout) appendLog(res.stdout, "STDOUT");
     if (res.stderr) appendLog(res.stderr, "STDERR");
 
-    setStatus(`🟢 ${isApply ? "Tweak aplicado" : "Tweak revertido"}: ${tweak.title}`, "Listo");
+    setStatus(` ${isApply ? "Tweak aplicado" : "Tweak revertido"}: ${tweak.title}`, "Listo");
     renderActiveTab();
+    return true;
   } catch (err) {
     appendLog(`Error en tweak ${tweak.id}: ${err.message}`, "ERROR");
-    setStatus(`🔴 Error ejecutando ${tweak.title}`, "Error");
+    setStatus(` Error ejecutando ${tweak.title}`, "Error");
+    return false;
   }
 }
 
@@ -836,16 +1095,16 @@ function renderAppsView() {
   return `
     <div class="device-banner">
       <div>
-        <div class="device-banner-title">📦 Descarga e Instalación 100% Silenciosa (WinGet + Fallback HTTP Directo)</div>
+        <div class="device-banner-title"> Descarga e Instalación 100% Silenciosa (WinGet + Fallback HTTP Directo)</div>
         <div class="device-banner-meta">
           Detecta automáticamente qué programas ya tienes instalados y descarga siempre la versión más reciente sin asistentes.
         </div>
       </div>
       <div style="display:flex; gap:10px;">
-        <button id="btn-rescan-apps" class="btn btn-sm">🔍 Re-escanear Instaladas</button>
-        <button id="btn-upgrade-all-winget" class="btn btn-sm">🔄 Actualizar Todas las Apps del PC</button>
-        <button id="btn-install-selected" class="btn btn-primary btn-sm">
-          🚀 Instalar Seleccionadas (${state.selectedApps.size})
+        <button id="btn-rescan-apps" class="btn btn-sm"> Re-escanear Instaladas</button>
+        <button id="btn-upgrade-all-winget" class="btn btn-sm"> Actualizar Todas las Apps del PC</button>
+        <button id="btn-install-selected" class="btn btn-primary btn-sm" ${!loadedModules.has("check_installed_apps") ? "disabled" : ""}>
+           Instalar Seleccionadas (${state.selectedApps.size})
         </button>
       </div>
     </div>
@@ -873,12 +1132,12 @@ function renderAppsView() {
                 </div>
                 <div class="card-title" style="margin-top:3px;">${escapeHtml(a.name)}</div>
               </div>
-              <input type="checkbox" class="app-check" data-appid="${a.id}" ${checked ? "checked" : ""} style="width:18px; height:18px; accent-color:var(--accent);" />
+              <input type="checkbox" class="app-check" aria-label="Seleccionar ${escapeHtml(a.name)}" data-appid="${a.id}" ${checked ? "checked" : ""} style="width:18px; height:18px; accent-color:var(--accent);" />
             </div>
             <div class="card-desc">${escapeHtml(a.description)}</div>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto; padding-top:8px; border-top:1px solid var(--border-subtle); font-size:11.5px;">
               <span style="font-family:monospace; color:var(--text-secondary);">${escapeHtml(a.wingetId)}</span>
-              <button class="btn btn-sm btn-install-single" data-appid="${a.id}">${isInstalled ? "Reinstalar / Actualizar" : "Instalar Silencioso"}</button>
+              <button class="btn btn-sm btn-install-single" data-appid="${a.id}" ${!loadedModules.has("check_installed_apps") ? "disabled" : ""}>${isInstalled ? "Reinstalar / Actualizar" : "Instalar Silencioso"}</button>
             </div>
           </div>
         `;
@@ -891,9 +1150,9 @@ function bindAppsEvents() {
   const btnRescanApps = document.getElementById("btn-rescan-apps");
   if (btnRescanApps) {
     btnRescanApps.addEventListener("click", async () => {
-      setStatus("🔍 Escaneando programas instalados en el Registro...", "check_installed_apps");
+      setStatus(" Escaneando programas instalados en el Registro...", "check_installed_apps");
       await refreshInstalledApps();
-      setStatus("🟢 Estado de aplicaciones instaladas actualizado", "Listo");
+      setStatus(" Estado de aplicaciones instaladas actualizado", "Listo");
     });
   }
 
@@ -930,19 +1189,26 @@ function bindAppsEvents() {
     btnInstallBatch.addEventListener("click", async () => {
       const chosen = state.apps.filter(a => state.selectedApps.has(a.id));
       if (chosen.length === 0) return;
-      for (let i = 0; i < chosen.length; i++) {
-        setStatus(`📦 [${i + 1}/${chosen.length}] Instalando ${chosen[i].name} en modo silencioso...`, `${chosen[i].wingetId}`);
-        await installSingleApp(chosen[i]);
+      if (batchProgress) return;
+      setBatchProgress("Instalando software seleccionado", 0, chosen.length);
+      try {
+        for (let i = 0; i < chosen.length; i++) {
+          setStatus(` [${i + 1}/${chosen.length}] Instalando ${chosen[i].name} en modo silencioso...`, `${chosen[i].wingetId}`);
+          if (!await installSingleApp(chosen[i])) return;
+          setBatchProgress("Instalando software seleccionado", i + 1, chosen.length);
+        }
+        await refreshInstalledApps();
+        setStatus(` ${chosen.length} aplicación(es) instaladas silenciosamente`, "Completado");
+      } finally {
+        setBatchProgress(null);
       }
-      await refreshInstalledApps();
-      setStatus(`🟢 ${chosen.length} aplicación(es) instaladas silenciosamente`, "Completado");
     });
   }
 
   const btnUpgradeAll = document.getElementById("btn-upgrade-all-winget");
   if (btnUpgradeAll) {
     btnUpgradeAll.addEventListener("click", async () => {
-      setStatus("🔄 Ejecutando winget upgrade --all --silent...", "Actualizando todo el software del PC");
+      setStatus(" Ejecutando winget upgrade --all --silent...", "Actualizando todo el software del PC");
       appendLog("Iniciando actualización masiva desatendida: winget upgrade --all --include-unknown --silent");
       try {
         const res = await invokeBackend("execute_tweak_commands", {
@@ -950,7 +1216,7 @@ function bindAppsEvents() {
         });
         if (res.stdout) appendLog(res.stdout, "WINGET");
         await refreshInstalledApps();
-        setStatus("🟢 Todas las aplicaciones del sistema han sido actualizadas", "Listo");
+        setStatus(" Todas las aplicaciones del sistema han sido actualizadas", "Listo");
       } catch (err) {
         appendLog(`Error en winget upgrade: ${err.message}`, "ERROR");
       }
@@ -959,7 +1225,7 @@ function bindAppsEvents() {
 }
 
 async function installSingleApp(app) {
-  setStatus(`📦 Instalando silenciosamente ${app.name} (${app.wingetId})...`, "WinGet / Fallback");
+  setStatus(` Instalando silenciosamente ${app.name} (${app.wingetId})...`, "WinGet / Fallback");
   appendLog(`Instalando ${app.name} -> winget install --id ${app.wingetId} --silent`);
   try {
     const res = await invokeBackend("install_app", {
@@ -969,9 +1235,12 @@ async function installSingleApp(app) {
     });
     if (res.stdout) appendLog(res.stdout, "INSTALL");
     if (res.stderr) appendLog(res.stderr, "WARN");
-    setStatus(`🟢 ${app.name} procesado correctamente`, "Listo");
+    setStatus(` ${app.name} procesado correctamente`, "Listo");
+    return true;
   } catch (err) {
     appendLog(`Error instalando ${app.name}: ${err.message}`, "ERROR");
+    setStatus(`Instalación interrumpida: ${app.name}`, "Error");
+    return false;
   }
 }
 
@@ -982,20 +1251,20 @@ function renderMonitorView() {
   return `
     <div class="device-banner">
       <div>
-        <div class="device-banner-title">📡 Monitor de Scripts en Vivo (Consola Interna + Procesos del Sistema)</div>
+        <div class="device-banner-title"> Monitor de Scripts en Vivo (Consola Interna + Procesos del Sistema)</div>
         <div class="device-banner-meta">
           Inspecciona en tiempo real todos los motores <code>powershell.exe</code>, <code>pwsh.exe</code>, <code>cmd.exe</code>, <code>wscript.exe</code>, <code>cscript.exe</code> y <code>mshta.exe</code> con su línea de comandos exacta.
         </div>
       </div>
       <div style="display:flex; gap:8px;">
-        <button id="btn-refresh-scripts" class="btn btn-primary btn-sm">🔄 Refrescar Procesos Ahora</button>
+        <button id="btn-refresh-scripts" class="btn btn-primary btn-sm"> Refrescar Procesos Ahora</button>
       </div>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">💻 1. Cola y Consola Interna de Ejecución de Blackwall</div>
-        <button id="btn-clear-console" class="btn btn-sm">🧹 Limpiar Consola</button>
+        <div class="card-title"> 1. Cola y Consola Interna de Ejecución de Blackwall</div>
+        <button id="btn-clear-console" class="btn btn-sm"> Limpiar Consola</button>
       </div>
       <pre id="internal-console-box" class="console-box">${escapeHtml(state.consoleLogs.join("\n"))}</pre>
     </div>
@@ -1003,7 +1272,7 @@ function renderMonitorView() {
     <div class="card">
       <div class="card-header">
         <div>
-          <div class="card-title">🕵️ 2. Motores de Scripts Activos en Windows (${state.liveScripts.length} Detectados)</div>
+          <div class="card-title"> 2. Motores de Scripts Activos en Windows (${state.liveScripts.length} Detectados)</div>
           <div class="card-desc">Incluye decodificador automático si algún script en ejecución utiliza parámetros ofuscados <code>-EncodedCommand</code> (Base64).</div>
         </div>
         <span class="risk-badge risk-low">Tiempo Real (WMI Win32_Process)</span>
@@ -1016,6 +1285,7 @@ function renderMonitorView() {
 }
 
 function renderLiveScriptsRows() {
+  if (!loadedModules.has("get_live_scripts")) return `<div class="card-desc">${operationErrors.has("get_live_scripts") ? "No se pudo consultar la lista de procesos." : "Consultando procesos del sistema…"}</div>`;
   if (!state.liveScripts || state.liveScripts.length === 0) {
     return `<div style="padding:14px; color:var(--text-secondary); font-size:13px;">No hay otros scripts externos en ejecución en este instante.</div>`;
   }
@@ -1032,11 +1302,11 @@ function renderLiveScriptsRows() {
         </div>
         ${p.decodedCmd ? `
           <div class="warning-box" style="margin-top:6px; font-family:monospace;">
-            🔓 <b>Base64 Decodificado:</b> ${escapeHtml(p.decodedCmd)}
+             <b>Base64 Decodificado:</b> ${escapeHtml(p.decodedCmd)}
           </div>
         ` : ""}
       </div>
-      <button class="btn btn-danger btn-sm btn-kill-script" data-pid="${p.pid}">🛑 Terminar (Kill)</button>
+      <button class="btn btn-danger btn-sm btn-kill-script" data-pid="${p.pid}"> Terminar (Kill)</button>
     </div>
   `).join("");
 }
@@ -1071,19 +1341,19 @@ function renderSafetyView() {
   return `
     <div class="device-banner">
       <div>
-        <div class="device-banner-title">🛡️ Módulo de Seguridad, Puntos de Restauración y Reparación</div>
+        <div class="device-banner-title"> Módulo de Seguridad, Puntos de Restauración y Reparación</div>
         <div class="device-banner-meta">
           Blackwall verifica que la Protección del Sistema esté habilitada y crea un Punto de Restauración automáticamente antes de aplicar tweaks.
         </div>
       </div>
-      <button id="btn-refresh-rp" class="btn btn-sm">🔄 Actualizar Lista de Puntos</button>
+      <button id="btn-refresh-rp" class="btn btn-sm"> Actualizar Lista de Puntos</button>
     </div>
 
     <div class="grid-2">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🛡️ Protección Automática y Puntos de Restauración</div>
-          <span class="risk-badge risk-low">System Restore Activo</span>
+          <div class="card-title"> Protección Automática y Puntos de Restauración</div>
+          <span class="risk-badge ${state.restoreInfo.protectionEnabled ? "risk-low" : "risk-medium"}">${!loadedModules.has("get_restore_points") ? "Pendiente de verificar" : state.restoreInfo.protectionEnabled ? "Protección habilitada" : "Protección no confirmada"}</span>
         </div>
         <div class="card-desc">
           Crea un punto de control instantáneo mediante <code>Checkpoint-Computer</code> / <code>SRSetRestorePointW</code> o abre el restaurador nativo de Windows (<code>rstrui.exe</code>).
@@ -1093,36 +1363,36 @@ function renderSafetyView() {
           <span>Crear Punto de Restauración automáticamente antes de aplicar optimizaciones</span>
         </label>
         <div style="display:flex; gap:10px; margin-top:auto;">
-          <button id="btn-manual-rp" class="btn btn-primary btn-sm">➕ Crear Punto de Restauración Ahora</button>
-          <button id="btn-open-rstrui" class="btn btn-sm">🕰️ Abrir Restaurar Sistema (rstrui.exe)</button>
+          <button id="btn-manual-rp" class="btn btn-primary btn-sm"> Crear Punto de Restauración Ahora</button>
+          <button id="btn-open-rstrui" class="btn btn-sm"> Abrir Restaurar Sistema (rstrui.exe)</button>
         </div>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">🔧 Herramientas de Reparación de Imagen (DISM, SFC &amp; Red)</div>
+          <div class="card-title"> Herramientas de Reparación de Imagen (DISM, SFC &amp; Red)</div>
           <span class="risk-badge risk-low">Mantenimiento</span>
         </div>
         <div class="card-desc">
           Verifica y repara archivos corruptos del sistema operativo Windows, exporta respaldos del Registro y restablece la pila TCP/IP + caché DNS.
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:auto;">
-          <button id="btn-run-sfc" class="btn btn-sm">🔍 Ejecutar SFC /scannow</button>
-          <button id="btn-run-dism" class="btn btn-sm">🩺 Ejecutar DISM /RestoreHealth</button>
-          <button id="btn-reset-net" class="btn btn-sm">🌐 Flush DNS &amp; Reset Winsock</button>
-          <button id="btn-reg-backup" class="btn btn-primary btn-sm">💾 Backup Registro (.reg)</button>
+          <button id="btn-run-sfc" class="btn btn-sm"> Ejecutar SFC /scannow</button>
+          <button id="btn-run-dism" class="btn btn-sm"> Ejecutar DISM /RestoreHealth</button>
+          <button id="btn-reset-net" class="btn btn-sm"> Flush DNS &amp; Reset Winsock</button>
+          <button id="btn-reg-backup" class="btn btn-primary btn-sm"> Backup Registro (.reg)</button>
         </div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <div class="card-title">📋 Puntos de Restauración Detectados en el Sistema (${pts.length})</div>
+        <div class="card-title"> Puntos de Restauración Detectados en el Sistema (${pts.length})</div>
         <span class="risk-badge risk-low">Unidad C:\\</span>
       </div>
       ${pts.length === 0 ? `
         <div style="font-size:13px; color:var(--text-secondary);">
-          No se listaron puntos previos o la sesión requiere elevación de Administrador para consultar <code>Get-ComputerRestorePoint</code>. Haz clic en <b>"Crear Punto de Restauración Ahora"</b> para registrar uno nuevo.
+          ${!loadedModules.has("get_restore_points") ? "La consulta de puntos de restauración todavía no se ha completado." : "No se listaron puntos previos. La consulta puede requerir permisos de Administrador."}
         </div>
       ` : `
         <div class="kv-list">
@@ -1166,35 +1436,35 @@ function bindSafetyEvents() {
   const btnSfc = document.getElementById("btn-run-sfc");
   if (btnSfc) {
     btnSfc.addEventListener("click", async () => {
-      setStatus("🔍 Ejecutando verificación de integridad SFC /scannow...", "sfc.exe /scannow");
+      setStatus(" Ejecutando verificación de integridad SFC /scannow...", "sfc.exe /scannow");
       appendLog("Iniciando System File Checker (sfc /scannow)...");
       const res = await invokeBackend("execute_tweak_commands", {
         commands: ["sfc /verifyonly"]
       });
       if (res.stdout) appendLog(res.stdout, "SFC");
       if (res.stderr) appendLog(res.stderr, "SFC-WARN");
-      setStatus("🟢 Verificación SFC completada (revisa Consola en Vivo)", "Listo");
+      setStatus(" Verificación SFC completada (revisa Consola en Vivo)", "Listo");
     });
   }
 
   const btnDism = document.getElementById("btn-run-dism");
   if (btnDism) {
     btnDism.addEventListener("click", async () => {
-      setStatus("🩺 Ejecutando análisis de imagen DISM /CheckHealth...", "DISM.exe");
+      setStatus(" Ejecutando análisis de imagen DISM /CheckHealth...", "DISM.exe");
       appendLog("Iniciando diagnóstico de imagen de Windows (DISM /Online /Cleanup-Image /CheckHealth)...");
       const res = await invokeBackend("execute_tweak_commands", {
         commands: ["DISM.exe /Online /Cleanup-Image /CheckHealth"]
       });
       if (res.stdout) appendLog(res.stdout, "DISM");
       if (res.stderr) appendLog(res.stderr, "DISM-WARN");
-      setStatus("🟢 Diagnóstico DISM completado (revisa Consola en Vivo)", "Listo");
+      setStatus(" Diagnóstico DISM completado (revisa Consola en Vivo)", "Listo");
     });
   }
 
   const btnRegBackup = document.getElementById("btn-reg-backup");
   if (btnRegBackup) {
     btnRegBackup.addEventListener("click", async () => {
-      setStatus("💾 Exportando respaldo del Registro...", "reg export");
+      setStatus(" Exportando respaldo del Registro...", "reg export");
       const res = await invokeBackend("execute_tweak_commands", {
         commands: [
           "$out = Join-Path $env:USERPROFILE 'Desktop\\Blackwall-Registry-Backup.reg'",
@@ -1203,25 +1473,25 @@ function bindSafetyEvents() {
         ]
       });
       if (res.stdout) appendLog(res.stdout, "BACKUP");
-      setStatus("🟢 Respaldo del Registro exportado en el Escritorio", "Listo");
+      setStatus(" Respaldo del Registro exportado en el Escritorio", "Listo");
     });
   }
 
   const btnResetNet = document.getElementById("btn-reset-net");
   if (btnResetNet) {
     btnResetNet.addEventListener("click", async () => {
-      setStatus("🌐 Limpiando caché DNS y restableciendo sockets...", "ipconfig /flushdns");
+      setStatus(" Limpiando caché DNS y restableciendo sockets...", "ipconfig /flushdns");
       const res = await invokeBackend("execute_tweak_commands", {
         commands: ["ipconfig /flushdns", "netsh winsock reset"]
       });
       if (res.stdout) appendLog(res.stdout, "NET");
-      setStatus("🟢 Caché DNS y Winsock restablecidos", "Listo");
+      setStatus(" Caché DNS y Winsock restablecidos", "Listo");
     });
   }
 }
 
 async function createManualRestorePoint() {
-  setStatus("🛡️ Creando Punto de Restauración de Windows...", "Checkpoint-Computer");
+  setStatus(" Creando Punto de Restauración de Windows...", "Checkpoint-Computer");
   appendLog("Solicitando creación de Punto de Restauración en unidad C:\\...");
   try {
     const res = await invokeBackend("create_restore_point", {
@@ -1229,7 +1499,7 @@ async function createManualRestorePoint() {
     });
     if (res.stdout) appendLog(res.stdout, "RESTORE");
     await refreshRestorePoints();
-    setStatus("🟢 Punto de Restauración creado exitosamente", "Listo");
+    setStatus(" Punto de Restauración creado exitosamente", "Listo");
   } catch (err) {
     appendLog(`Error creando punto de restauración: ${err.message}`, "ERROR");
   }
@@ -1244,36 +1514,49 @@ function setupModalsAndQuickButtons() {
 
   const modal = document.getElementById("ota-modal");
   const body = document.getElementById("ota-modal-body");
+  const closeModal = () => {
+    modal.classList.add("hidden");
+    document.getElementById("btn-ota-check").focus();
+  };
+  modal.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeModal();
+    if (event.key !== "Tab") return;
+    const first = document.getElementById("btn-ota-postpone");
+    const last = document.getElementById("btn-ota-confirm");
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
 
   document.getElementById("btn-ota-check").addEventListener("click", () => {
     const v = state.version || {
-      appVersion: "1.0.0",
-      latestRemoteVersion: "1.1.0",
-      changelog: ["Actualización remota lista."]
+      appVersion: "Sin consultar",
+      changelog: []
     };
     body.innerHTML = `
       <div style="margin-bottom:10px;">
-        Versión instalada: <b>v${escapeHtml(v.appVersion)}</b> → Nueva versión remota: <b style="color:var(--accent);">v${escapeHtml(v.latestRemoteVersion)}</b>
+        Versión del catálogo: <b>v${escapeHtml(v.appVersion)}</b> · Versión publicada: <b style="color:var(--accent);">v${escapeHtml(v.latestRemoteVersion || v.appVersion)}</b>
       </div>
       <div style="font-weight:600; color:var(--text-primary); margin-bottom:6px;">Notas de la versión (Changelog):</div>
       <ul style="padding-left:18px; display:flex; flex-direction:column; gap:5px;">
         ${(v.changelog || []).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
       <div style="margin-top:12px; padding:10px; border-radius:8px; background:var(--bg-app); font-size:11.5px;">
-        🔒 <b>Mecanismo Zero-Lock Portable:</b> Si aceptas, Blackwall verificará la firma SHA-256 (<code>${escapeHtml(v.binary?.sha256?.slice(0, 20) || "e3b0c442...")}...</code>), renombrará el binario en uso a <code>Blackwall.exe.old</code> mediante <code>MoveFileExW</code> y actualizará los catálogos en caliente.
+         <b>Verificación de integridad:</b> Si aceptas, Blackwall comprobará el SHA-256 del binario antes de actualizar (<code>${escapeHtml(v.binary?.sha256?.slice(0, 20) || "No disponible")}</code>).
       </div>
     `;
+    document.getElementById("btn-ota-confirm").disabled = !v.binary?.downloadUrl || !v.binary?.sha256;
     modal.classList.remove("hidden");
+    document.getElementById("btn-ota-postpone").focus();
   });
 
   document.getElementById("btn-ota-postpone").addEventListener("click", () => {
-    modal.classList.add("hidden");
+    closeModal();
   });
 
   document.getElementById("btn-ota-confirm").addEventListener("click", async () => {
-    modal.classList.add("hidden");
+    closeModal();
     const v = state.version || {};
-    setStatus("🔄 Ejecutando actualización remota OTA (SHA-256 + Self-Replace)...", "perform_ota_update");
+    setStatus(" Ejecutando actualización remota OTA (SHA-256 + Self-Replace)...", "perform_ota_update");
     appendLog("[OTA] Iniciando verificación SHA-256 y actualización de catálogos/binario...");
     try {
       const res = await invokeBackend("perform_ota_update", {
@@ -1283,7 +1566,7 @@ function setupModalsAndQuickButtons() {
       if (res.stdout) appendLog(res.stdout, "OTA");
       await loadCatalogs();
       document.getElementById("btn-ota-check").textContent = `✓ OTA v${state.version?.appVersion || "1.1.0"}`;
-      setStatus(`🟢 Blackwall actualizado a la versión v${state.version?.appVersion || "1.1.0"}`, "Completado");
+      setStatus(` Blackwall actualizado a la versión v${state.version?.appVersion || "1.1.0"}`, "Completado");
       renderActiveTab();
     } catch (err) {
       appendLog(`Error en OTA: ${err.message}`, "ERROR");

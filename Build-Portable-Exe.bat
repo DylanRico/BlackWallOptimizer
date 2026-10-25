@@ -21,6 +21,7 @@ echo Compilando Blackwall.exe con recursos de catalogos e iconos HD integrados..
   "/resource:%~dp0catalogs\tweaks.json,tweaks.json" ^
   "/resource:%~dp0catalogs\apps.json,apps.json" ^
   "/resource:%~dp0catalogs\version.json,version.json" ^
+  "/resource:%~dp0assets\icons\blackwall-mark.png,blackwall-mark.png" ^
   "/resource:%~dp0assets\icons\brave.png,brave.png" ^
   "/resource:%~dp0assets\icons\firefox.png,firefox.png" ^
   "/resource:%~dp0assets\icons\chrome.png,chrome.png" ^

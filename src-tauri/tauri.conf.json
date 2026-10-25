@@ -11,13 +11,15 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Blackwall — Auditoría Profunda de Hardware, Optimización & Debloat (Win 10/11)",
+        "title": "Blackwall — Muro Negro",
         "width": 1380,
         "height": 860,
         "minWidth": 1100,
         "minHeight": 720,
         "resizable": true,
-        "center": true
+        "center": true,
+        "maximized": true,
+        "fullscreen": false
       }
     ],
     "security": {
@@ -25,6 +27,7 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   }
 }
