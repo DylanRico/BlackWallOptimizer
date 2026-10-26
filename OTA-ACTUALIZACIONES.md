@@ -2,6 +2,8 @@
 
 Implementación local del 25 de octubre de 2026, publicada el 26 de octubre de 2026. Sustituye el flujo WPF experimental descrito en `SEGURIDAD-Y-ESTADO-OTA.md`. La release `v1.4.1` y el manifiesto firmado están publicados; se verificó su descarga desde GitHub con el cliente OTA real. Rust/Tauri y el bridge de desarrollo conservan sus implementaciones anteriores y no están cubiertos por este protocolo.
 
+**Entrega vigente: [Blackwall 1.4.4](https://github.com/DylanRico/BlackWallOptimizer/releases/tag/v1.4.4).** Fuentes sincronizadas, assets firmados publicados y manifiesto predeterminado actualizado después del binario. El cliente nativo 1.4.3 detectó y descargó 1.4.4 desde GitHub, verificando firma, versión, tamaño y hash. La instalación/reapertura interactiva queda para la prueba manual del propietario con la copia anterior conservada en el escritorio. Detalles en [ENTREGA-FLUIDEZ-1.4.4.md](ENTREGA-FLUIDEZ-1.4.4.md); las referencias 1.4.0/1.4.1 de esta guía describen la entrega inicial.
+
 ## Versiones y compilación
 
 - `catalogs/version.json` es metadato de compilación: versión predeterminada local `1.4.4`, dirección del índice firmado y notas. Ya no contiene el hash de su propio ejecutable. La URL se integra en el ejecutable: no existe campo editable ni se lee una URL sustitutiva desde AppData. Cambiar el metadato local no publica ni instala una OTA.

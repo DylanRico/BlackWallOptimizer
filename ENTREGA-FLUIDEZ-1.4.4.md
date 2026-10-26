@@ -67,4 +67,8 @@ El vídeo original de referencia no estaba disponible para reproducirlo otra vez
 
 ## Estado de publicación
 
-Paquete preparado y probado. La publicación y la comprobación del asset y manifiesto públicos se registran al completar el último paso.
+Publicados las fuentes y la etiqueta `v1.4.4` (commit de producto `50657fceab2c82b41668b47fc3af3d6a64c0b735`), la [release 1.4.4](https://github.com/DylanRico/BlackWallOptimizer/releases/tag/v1.4.4) y sus dos assets: `Blackwall.exe` y `update.json`. Después de verificar el binario público se publicó el mismo manifiesto, sin modificar sus bytes, en `catalogs/update.json` de `main` (commit `8edfd43`).
+
+El cliente C# nativo de la copia 1.4.3 consultó la URL predeterminada real, verificó la firma de 1.4.4, detectó la versión posterior, descargó los 1.246.208 bytes y verificó versión PE y SHA-256. El manifiesto público y el paquete firmado local coinciden exactamente. No se ejecutó el instalador sobre el escritorio del usuario.
+
+La copia nueva `%USERPROFILE%\Desktop\Blackwall.exe` se verificó como 1.4.4.0 y con el SHA-256 del asset publicado. La copia anterior de prueba sigue siendo 1.4.3.0. El escáner de patrones del binario público no encontró claves privadas, tokens GitHub ni rutas personales. El conector de GitHub no ofrecía carga de assets de releases; la publicación de esos assets se realizó con la API oficial y la credencial de Git ya configurada, sin guardarla en archivos.
