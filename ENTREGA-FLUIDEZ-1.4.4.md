@@ -18,7 +18,7 @@ Fecha: 26 de octubre de 2026. El usuario aprobó físicamente el scroll, el modo
 
 | Comprobación | Resultado | Alcance |
 | --- | --- | --- |
-| UI WPF | 136 checks y 29 capturas | Seis secciones, búsqueda, filtros, selección, foco, estados, fallos y acciones simuladas; aplicados también al binario firmado 1.4.4. |
+| UI WPF | 136 checks y 29 capturas | Seis secciones, búsqueda, filtros, selección, foco, estados, fallos y acciones simuladas; aplicados también al binario del paquete OTA 1.4.4. |
 | Frontend histórico | 16 pruebas | Sin cambios en los contratos web existentes. |
 | Compilador | 12 checks | Fixture aislado: recursos, versión, icono y conservación del ejecutable anterior. |
 | OTA | 44 checks | Protocolo, firma, alteraciones, transacciones y subprocesos sobre copias desechables. |
@@ -72,3 +72,5 @@ Publicados las fuentes y la etiqueta `v1.4.4` (commit de producto `50657fceab2c8
 El cliente C# nativo de la copia 1.4.3 consultó la URL predeterminada real, verificó la firma de 1.4.4, detectó la versión posterior, descargó los 1.246.208 bytes y verificó versión PE y SHA-256. El manifiesto público y el paquete firmado local coinciden exactamente. No se ejecutó el instalador sobre el escritorio del usuario.
 
 La copia nueva `%USERPROFILE%\Desktop\Blackwall.exe` se verificó como 1.4.4.0 y con el SHA-256 del asset publicado. La copia anterior de prueba sigue siendo 1.4.3.0. El escáner de patrones del binario público no encontró claves privadas, tokens GitHub ni rutas personales. El conector de GitHub no ofrecía carga de assets de releases; la publicación de esos assets se realizó con la API oficial y la credencial de Git ya configurada, sin guardarla en archivos.
+
+La firma descrita autentica el manifiesto OTA y el hash del paquete; no es un certificado Authenticode de Windows. El aviso UAC/SmartScreen puede seguir indicando un editor desconocido.
