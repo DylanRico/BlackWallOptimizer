@@ -1,0 +1,6 @@
+simulation: blackwall-ota
+routing: path
+mocks:
+  - name: ota
+    routeKey: ota
+    path: postman/mocks/ota/config.yaml

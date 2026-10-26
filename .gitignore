@@ -26,6 +26,13 @@ __pycache__/
 
 # Entornos y certificados temporales
 *.pfx
+*.dpapi
+*.previous.*
+*.failed.*
+*.pending.*
+*.ota.lock
+*.ota-session.lock
+*.ota-state.json
 *.p12
 *.pem
 *.key
@@ -39,7 +46,6 @@ __pycache__/
 *.sqlite
 *.sqlite3
 *.exe
-!/Blackwall.exe
 Blackwall-Reporte-*
 check-icons.ps1
 check-dimensions.ps1

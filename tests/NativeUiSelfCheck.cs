@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -49,12 +50,17 @@ internal static class NativeUiSelfCheck
             Check(Activity.Visibility == Visibility.Collapsed, "no persistent startup overlay");
             Check(_window.WindowState == WindowState.Maximized, "application starts maximized");
             CheckWindowBounds();
+            CheckStartupRouting();
             CheckSmoothScrolling();
             CheckCatalogSelection();
+            CheckAdaptiveCards();
 
             MarkLoaded("hardware");
             Call("RenderCurrentTab");
             Snapshot(args[1], "native-initial.png");
+            Button navTipButton = ((Dictionary<string, Button>)Field("_navButtons"))["monitor"];
+            navTipButton.RaiseEvent(new KeyboardFocusChangedEventArgs(Keyboard.PrimaryDevice, 0, null, navTipButton) { RoutedEvent = Keyboard.GotKeyboardFocusEvent });
+            Check(!((ToolTip)navTipButton.ToolTip).IsOpen, "keyboard focus does not pin a category tooltip open");
             Console.WriteLine("Shell construction + offscreen render: " + shellWatch.ElapsedMilliseconds + " ms (not a full launch benchmark).");
             SetField("_activeTab", "test");
 
@@ -78,6 +84,20 @@ internal static class NativeUiSelfCheck
             Check(Reads.Count == 0, "completed read releases in-flight guard");
             Check((bool)Field("_loadedModules").GetType().GetMethod("Contains").Invoke(Field("_loadedModules"), new object[] { "test" }), "successful module is marked loaded");
             Check(Activity.Visibility == Visibility.Collapsed, "successful read hides activity");
+
+            string quietStatus = ((TextBlock)Field("_statusText")).Text;
+            var quietSource = new TaskCompletionSource<int>();
+            Task quiet = (Task)Call("RunReadAsync", "monitor", "Sondeo simulado", new Func<Task>(() => quietSource.Task), true);
+            PumpUntil(() => Reads.Contains("monitor"));
+            Check(Activity.Visibility == Visibility.Collapsed, "background polling never flashes the activity overlay");
+            quietSource.SetResult(0); PumpUntil(() => quiet.IsCompleted);
+            Check(((TextBlock)Field("_statusText")).Text == quietStatus, "background success does not overwrite the user's status");
+            SetField("_activeTab", "monitor");
+            Task quietFailure = (Task)Call("RunReadAsync", "monitor", "Sondeo simulado", new Func<Task>(() => { throw new InvalidOperationException("E_TEST_BACKGROUND"); }), true);
+            PumpUntil(() => quietFailure.IsCompleted);
+            Check(Activity.Visibility == Visibility.Visible && Errors.Contains("monitor"), "background failures remain visible and recoverable");
+            ((Button)Field("_activityDismiss")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            SetField("_activeTab", "test");
 
             Task failed = Read("test", "Prueba de error", () => { throw new InvalidOperationException("E_TEST_READ: error simulado para verificar la recuperación"); });
             PumpUntil(() => failed.IsCompleted);
@@ -122,14 +142,19 @@ internal static class NativeUiSelfCheck
             Call("UpdateNavSelection");
             Call("RenderCurrentTab");
             Snapshot(args[1], "native-optimization-small.png", 1080, 700);
+            if ((bool)Field("_sidebarCollapsed")) Call("ToggleSidebar");
             CheckVisualPreferences(args[1], preferences);
             CheckTweakPresentation(args[1]);
-            CheckExoticMotion(args[1]);
+            CheckGraphiteInteractions(args[1]);
+            CheckStableSectionFilters(args[1]);
+            CheckContrast();
             ((Button)Field("_themeBtn")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             ((Button)Field("_themeBtn")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             ((Button)Field("_themeBtn")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Snapshot(args[1], "native-light-small.png", 1080, 700);
             Check(!(bool)Field("_isDark"), "theme control switches to light mode");
+            CheckContrast();
+            foreach (double scale in new[] { 1.25, 1.5, 2.0 }) Snapshot(args[1], "native-light-scale-" + (int)(scale * 100) + ".png", 1080, 700, null, scale);
             Check(Reads.Count == 0 && Field("_hardware") == null, "offscreen rendering never starts system reads");
             if (args.Length == 3)
             {
@@ -159,6 +184,8 @@ internal static class NativeUiSelfCheck
                     }
                 }
             }
+            // Disposing a presentation source invalidates template visuals in offscreen renders.
+            CheckExoticMotion(args[1]);
             Console.WriteLine("PASS: " + _checks + " native UI checks; " + _screenshots + " offscreen screenshots.");
             return 0;
         }
@@ -177,6 +204,9 @@ internal static class NativeUiSelfCheck
     private static void CheckExoticMotion(string directory)
     {
         if (!SystemParameters.ClientAreaAnimation) return;
+        SetField("_reduceMotion", true);
+        Call("UpdateMotionPreference");
+        if ((bool)Field("_sidebarCollapsed")) Call("ToggleSidebar");
         SetField("_reduceMotion", false);
         Call("UpdateMotionPreference");
         FrameworkElement content = (FrameworkElement)_window.Content;
@@ -192,11 +222,11 @@ internal static class NativeUiSelfCheck
             testButton.ApplyTemplate();
             Call("OnMotionButtonLoaded", testButton, new RoutedEventArgs(FrameworkElement.LoadedEvent));
             Call("ToggleSidebar");
-            PumpUntil(() => { double width = ((ColumnDefinition)Field("_sidebarColumn")).Width.Value; return width > 73 && width < 247; });
-            double intermediate = ((ColumnDefinition)Field("_sidebarColumn")).Width.Value;
-            Check(intermediate > 72 && intermediate < 248, "sidebar width traverses intermediate values");
+            Check(_window.HasAnimatedProperties, "overlay uses a native animation clock");
+            double intermediate = ((Border)Field("_sidebarBorder")).Width;
+            Check(((ColumnDefinition)Field("_sidebarColumn")).Width.Value == 72, "animated overlay leaves the content rail stable");
             Call("ToggleSidebar");
-            PumpUntil(() => Math.Abs(((ColumnDefinition)Field("_sidebarColumn")).Width.Value - 248) < 0.01);
+            PumpUntil(() => Math.Abs(((Border)Field("_sidebarBorder")).Width - 248) < 0.01);
             Check(true, "rapid reversal settles at the most recent sidebar target");
             var scroll = (ScrollViewer)Field("_mainScroll");
             var page = (FrameworkElement)scroll.Content;
@@ -206,13 +236,12 @@ internal static class NativeUiSelfCheck
             var first = (FrameworkElement)animated[0];
             var transform = (TransformGroup)first.RenderTransform;
             var translate = (TranslateTransform)transform.Children[1];
-            PumpUntil(() => translate.Y > 0.1 && translate.Y < 29);
-            Check(first.Opacity > 0 && first.Opacity < 1, "card entrance passes through intermediate opacity and translation");
+            Check(translate.HasAnimatedProperties && first.HasAnimatedProperties, "card entrance has native opacity and translation clocks");
             Console.WriteLine("Motion sample: sidebar=" + intermediate.ToString("F1") + " DIP; cardY=" + translate.Y.ToString("F1") + "; opacity=" + first.Opacity.ToString("F2"));
             Call("PlayButtonSheen", (Button)Field("_themeBtn"));
             Button button = (Button)Field("_themeBtn");
             var sheen = (Border)button.Template.FindName("Sheen", button);
-            Check(sheen.Background is LinearGradientBrush, "button reflection uses an animated gradient");
+            Check(sheen.BorderBrush is LinearGradientBrush, "button reflection uses an animated gradient");
             object energy = Field("_headerEnergy");
             energy.GetType().GetMethod("SetRunning").Invoke(energy, new object[] { true });
             Check((bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "electric trace runs on demand");
@@ -220,13 +249,250 @@ internal static class NativeUiSelfCheck
             Call("UpdateMotionPreference");
             Check(animated.Count == 0 && !first.HasAnimatedProperties && first.RenderTransform == Transform.Identity, "reduced motion removes in-flight card animations");
             Check(!(bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "reduced motion stops the electric trace timer");
-            Check(sheen.Background == null, "reduced motion clears active button reflection");
+            Check(sheen.BorderBrush == null, "reduced motion clears active button reflection");
+            Snapshot(directory, "native-motion-rest.png", 1080, 700, content);
             host.RootVisual = null;
         }
         _window.Content = content;
-        Snapshot(directory, "native-motion-rest.png", 1080, 700);
         SetField("_reduceMotion", false);
         Call("UpdateMotionPreference");
+    }
+
+    private static void CheckGraphiteInteractions(string directory)
+    {
+        SetField("_reduceMotion", true);
+        Call("UpdateMotionPreference");
+        if (!(bool)Field("_sidebarCollapsed")) Call("ToggleSidebar");
+        var input = (TextBox)Field("_omniboxInput");
+        input.Text = "zzzz-no-match-987";
+        Check(((StackPanel)Field("_omniboxResultsPanel")).Children[0] is TextBlock, "global search has a no-results state");
+        input.Text = "Windows";
+        IList results = (IList)Field("_omniboxItems");
+        Check(results.Count > 0 && results[0] is Button, "search results expose keyboard-compatible controls");
+        using (var source = new HwndSource(new HwndSourceParameters("Blackwall keyboard check") { Width = 1, Height = 1, WindowStyle = unchecked((int)0x80000000) }))
+        {
+            int selectedIndex = (int)Field("_omniboxSelected");
+            var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Down) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            Call("OnOmniboxKeyDown", input, down);
+            Check(down.Handled && (int)Field("_omniboxSelected") == (selectedIndex + 1) % results.Count, "Down key advances the visible search selection");
+            var up = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Up) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            Call("OnOmniboxKeyDown", input, up);
+            Check(up.Handled && (int)Field("_omniboxSelected") == selectedIndex, "Up key restores the previous search selection");
+        }
+        Snapshot(directory, "native-search.png", 1366, 768);
+        Snapshot(directory, "native-search-results.png", 520, 390, (FrameworkElement)((System.Windows.Controls.Primitives.Popup)Field("_omniboxPopup")).Child);
+        input.Text = "Brave";
+        var selected = (HashSet<string>)Field("_selectedApps");
+        int previousSelection = selected.Count;
+        using (var source = new HwndSource(new HwndSourceParameters("Blackwall Enter check") { Width = 1, Height = 1, WindowStyle = unchecked((int)0x80000000) }))
+            Call("OnOmniboxKeyDown", input, new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        Check((string)Field("_activeTab") == "apps" && selected.Count == previousSelection, "opening a software search result never selects or installs it");
+        Check(!((System.Windows.Controls.Primitives.Popup)Field("_omniboxPopup")).IsOpen, "opening a search result closes the popup");
+        SetField("_activeTab", "optimization");
+        Call("UpdateNavSelection");
+        MarkLoaded("tweaks");
+        SetField("_hardware", new Dictionary<string, object>());
+        var fixture = new Dictionary<string, object> { { "id", "ui-action" }, { "title", "Prueba de contrato" }, { "summary", "Un resumen con texto largo que debe permanecer legible en tamaños reducidos sin esconder el riesgo ni la acción." }, { "riskLevel", "high" }, { "riskWarning", "Riesgo visible" }, { "applyOps", new object[] { "apply-payload" } }, { "undoOps", new object[] { "undo-payload" } } };
+        var states = (Dictionary<string, bool>)Field("_tweakStates");
+        states["ui-action"] = false;
+        TaskCompletionSource<int> pending = new TaskCompletionSource<int>();
+        int calls = 0;
+        bool requestedApply = false;
+        object payload = null;
+        object originalHandler = Field("_executeTweakAction");
+        SetField("_executeTweakAction", new Func<Dictionary<string, object>, bool, Task>((t, apply) => { calls++; payload = t; requestedApply = apply; return pending.Task; }));
+        Border card = (Border)Call("BuildTweakCard", fixture);
+        Grid layout = (Grid)card.Child;
+        Button action = (Button)((DockPanel)layout.Children[1]).Children[0];
+        action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(calls == 1 && Object.ReferenceEquals(payload, fixture) && requestedApply, "apply sends the unchanged catalog object once while pending");
+        Check(!action.IsEnabled && !states["ui-action"], "pending action cannot announce success before the backend responds");
+        pending.SetException(new InvalidOperationException("E_TEST_ACTION"));
+        PumpUntil(() => action.IsEnabled);
+        Check(!states["ui-action"] && ((TextBlock)((DockPanel)layout.Children[1]).Children[1]).Text.Contains("E_TEST_ACTION"), "failed action preserves system state and displays the backend error");
+        states["ui-action"] = true;
+        pending = new TaskCompletionSource<int>();
+        action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(calls == 2 && !requestedApply && Object.ReferenceEquals(payload, fixture), "revert sends the same catalog object with apply=false");
+        pending.SetResult(0);
+        PumpUntil(() => action.IsEnabled);
+        SetField("_executeTweakAction", originalHandler);
+        var batchButton = new Button { Content = "Prueba de tarea" };
+        var batch = new TaskCompletionSource<int>();
+        int batchCalls = 0;
+        Func<Task> operation = () => { batchCalls++; return batch.Task; };
+        Task batchRun = (Task)Call("RunUiActionAsync", "test-batch", batchButton, operation);
+        Task duplicateBatch = (Task)Call("RunUiActionAsync", "test-batch", batchButton, operation);
+        Check(batchCalls == 1 && !batchButton.IsEnabled && duplicateBatch.IsCompleted, "repeated batch clicks share the existing execution guard");
+        batch.SetException(new InvalidOperationException("E_TEST_BATCH"));
+        PumpUntil(() => batchRun.IsCompleted);
+        Check(!batchRun.IsFaulted && batchButton.IsEnabled && Convert.ToString(batchButton.Content) == "Prueba de tarea", "failed batch restores its button without announcing success");
+        states.Remove("ui-action");
+        SetField("_hardware", null);
+        Window modalOwner = (Window)Activator.CreateInstance(_type, new object[] { Path.Combine(directory, "modal-preferences.json") });
+        ((DispatcherTimer)_type.GetField("_scriptMonitorTimer", Private).GetValue(modalOwner)).Stop();
+        Type releaseType = _type.Assembly.GetType("Blackwall.OtaRelease", true);
+        object release = Activator.CreateInstance(releaseType);
+        releaseType.GetField("Version").SetValue(release, "99.0.0");
+        releaseType.GetField("Hash").SetValue(release, new string('a', 64));
+        releaseType.GetField("Notes").SetValue(release, "Fixture de prueba: desplazamiento continuo.\n\nNotas largas para verificar que la tarjeta conserva sus acciones y permite leer todas las mejoras sin ejecutar una actualización.");
+        _type.GetField("_availableRelease", Private).SetValue(modalOwner, release);
+        new WindowInteropHelper(modalOwner).EnsureHandle();
+        Window modal = (Window)_type.GetMethod("CreateOtaUpdateDialog", Private).Invoke(modalOwner, null);
+        Check(modal.Owner == modalOwner && Descendants((DependencyObject)modal.Content).OfType<ScrollViewer>().Any(), "OTA dialog retains an owner and scrollable content without making requests");
+        Check(modal.Width < modal.Height, "verified update invitation uses a portrait layout");
+        var updateButtons = Descendants((DependencyObject)modal.Content).OfType<Button>().Select(b => Convert.ToString(b.Content)).ToList();
+        Check(updateButtons.Contains("Actualizar ahora") && updateButtons.Contains("Más tarde"), "update invitation retains an explicit install choice and postponement");
+        Check(Descendants((DependencyObject)modal.Content).OfType<TextBox>().All(t => t.IsReadOnly), "update dialog exposes no editable update source");
+        Check(!Descendants((DependencyObject)modal.Content).OfType<Expander>().Any(), "update origin is absent from the production dialog");
+        Snapshot(directory, "native-update-dialog.png", 492, 700, (FrameworkElement)modal.Content);
+        modal.Close();
+        _type.GetField("_isDark", Private).SetValue(modalOwner, false);
+        _type.GetMethod("UpdateThemeBrushes", Private).Invoke(modalOwner, null);
+        modal = (Window)_type.GetMethod("CreateOtaUpdateDialog", Private).Invoke(modalOwner, null);
+        Snapshot(directory, "native-update-dialog-light.png", 492, 700, (FrameworkElement)modal.Content);
+        modal.Close();
+        modalOwner.Close();
+        object originalProcesses = Field("_liveScripts");
+        var processFixture = new Dictionary<string, object> { { "pid", 2147483000 }, { "parentPid", 0 }, { "name", "fixture.exe" }, { "commandLine", "UI fixture only" }, { "memoryMb", 12.5 } };
+        SetField("_liveScripts", new List<Dictionary<string, object>> { processFixture });
+        Call("BuildMonitorView");
+        var labels = (Dictionary<int, TextBlock>)Field("_monitorProcessMemoryLabels");
+        TextBlock memoryLabel = labels[2147483000];
+        processFixture["memoryMb"] = 24.5;
+        Call("UpdateMonitorProcessMemoryLabels");
+        Check(Object.ReferenceEquals(memoryLabel, labels[2147483000]) && memoryLabel.Text.Contains("24"), "live RAM updates reuse the existing process row");
+        SetField("_liveScripts", originalProcesses);
+        Call("RenderCurrentTab");
+        // The native popup has its own presentation source; capture its actual child separately.
+        Check(((ColumnDefinition)Field("_sidebarColumn")).Width.Value == 72, "overlay menu reserves a stable 72 DIP rail");
+        object page = ((ScrollViewer)Field("_mainScroll")).Content;
+        Call("ToggleSidebar");
+        Check(((ColumnDefinition)Field("_sidebarColumn")).Width.Value == 72 && Object.ReferenceEquals(page, ((ScrollViewer)Field("_mainScroll")).Content), "opening the overlay neither reflows nor rebuilds the page");
+        Snapshot(directory, "native-overlay.png", 1366, 768);
+        Call("ToggleSidebar");
+        Snapshot(directory, "native-graphite.png", 1366, 768);
+        var scroll = (ScrollViewer)Field("_mainScroll");
+        scroll.ScrollToVerticalOffset(540); scroll.UpdateLayout();
+        Snapshot(directory, "native-cards.png", 1366, 768);
+        foreach (double scale in new[] { 1.25, 1.5, 2.0 }) Snapshot(directory, "native-dark-scale-" + (int)(scale * 100) + ".png", 1080, 700, null, scale);
+        var search = (TextBox)Field("_sectionSearch");
+        SetField("_optRiskScope", "high");
+        search.Text = "zzzz-empty-filter";
+        Check((string)Field("_tweakSearchText") == "zzzz-empty-filter" && (string)Field("_optRiskScope") == "high", "section search preserves the risk filter across renders");
+        search = (TextBox)Field("_sectionSearch");
+        search.Text = "";
+        SetField("_optRiskScope", "all");
+        Call("RenderCurrentTab");
+        SetField("_reduceMotion", false);
+        Call("UpdateMotionPreference");
+    }
+
+    private static double Luminance(Color color)
+    {
+        Func<byte, double> channel = b => { double v = b / 255.0; return v <= 0.04045 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * channel(color.R) + 0.7152 * channel(color.G) + 0.0722 * channel(color.B);
+    }
+
+    private static IEnumerable<FrameworkElement> Descendants(DependencyObject node)
+    {
+        var element = node as FrameworkElement;
+        if (element != null) yield return element;
+        foreach (object child in LogicalTreeHelper.GetChildren(node))
+        {
+            var dependency = child as DependencyObject;
+            if (dependency != null) foreach (var descendant in Descendants(dependency)) yield return descendant;
+        }
+    }
+
+    private static void CheckStableSectionFilters(string directory)
+    {
+        SetField("_activeTab", "optimization");
+        SetField("_optDeviceScope", "all");
+        SetField("_optRiskScope", "all");
+        SetField("_tweakSubcategoryScope", "Todas");
+        SetField("_tweakSearchText", "");
+        Call("RenderCurrentTab");
+        var viewer = (ScrollViewer)Field("_mainScroll");
+        var page = (DependencyObject)viewer.Content;
+        var field = (TextBox)Field("_sectionSearch");
+        var cards = Descendants(page).Where(c => c.Uid == "motion-card" && c.Tag != null).ToArray();
+        Check(cards.Length > 0, "filter regression uses real tweak catalog cards");
+        var updaters = (IDictionary)Field("_tweakCardUpdaters");
+        object updater = updaters[cards[0].Tag];
+        field.Text = "zzzz-no-filter-results";
+        Check(Object.ReferenceEquals(page, viewer.Content) && Object.ReferenceEquals(field, Field("_sectionSearch")), "typing retains the search field and complete page");
+        Check(cards.All(c => c.Visibility == Visibility.Collapsed), "no-results filter collapses existing cards");
+        Check(Descendants(page).OfType<TextBlock>().Any(t => t.Text == "Sin resultados" && t.Parent != null), "filter retains an accessible empty-results message");
+        Snapshot(directory, "native-filter-empty.png", 1366, 768);
+        field.Text = "";
+        Check(cards.All(c => c.Visibility == Visibility.Visible) && Object.ReferenceEquals(updater, updaters[cards[0].Tag]), "clearing a filter reuses the cards and action bindings");
+        var item = ((List<Dictionary<string, object>>)Field("_tweaks")).First(t => Convert.ToString(t["id"]) == Convert.ToString(cards[0].Tag));
+        string title = Convert.ToString(item["title"]);
+        field.Text = title;
+        Check(cards[0].Visibility == Visibility.Visible, "section filter retains case-insensitive catalog matching");
+        field.Select(0, Math.Min(3, field.Text.Length));
+        Check(Object.ReferenceEquals(field, Field("_sectionSearch")) && field.SelectionLength == Math.Min(3, title.Length), "the stable field retains text selection");
+        field.Text = "";
+        SetField("_activeTab", "apps");
+        SetField("_appCategoryScope", "Todas");
+        SetField("_appSearchText", "");
+        Call("RenderCurrentTab");
+        page = (DependencyObject)viewer.Content;
+        field = (TextBox)Field("_sectionSearch");
+        var appCard = Descendants(page).First(c => c.Uid == "motion-card" && c.Tag != null);
+        var checkbox = Descendants(appCard).OfType<CheckBox>().First();
+        var selected = (HashSet<string>)Field("_selectedApps");
+        bool previous = selected.Contains(Convert.ToString(appCard.Tag));
+        checkbox.IsChecked = !previous;
+        checkbox.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
+        Check(Object.ReferenceEquals(page, viewer.Content) && selected.Contains(Convert.ToString(appCard.Tag)) == !previous, "app selection updates in place without rebuilding or executing an install");
+        Check(Convert.ToString(((Button)Field("_installSelectedButton")).Content).Contains("(" + selected.Count + ")"), "selection count follows the real selected set");
+        field.Text = "zzzz-no-app-results";
+        Check(appCard.Visibility == Visibility.Collapsed && Object.ReferenceEquals(field, Field("_sectionSearch")), "app filter preserves its input and selected card");
+        Snapshot(directory, "native-app-filter-empty.png", 1366, 768);
+        field.Text = "";
+        Check(checkbox.IsChecked == !previous && appCard.Visibility == Visibility.Visible, "selected app survives hiding and restoring results");
+        checkbox.IsChecked = previous;
+        checkbox.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
+        SetField("_activeTab", "monitor");
+        Call("RenderCurrentTab");
+        var console = (TextBox)Field("_liveConsoleTextBox");
+        Call("AppendLog", "PERF_TEST_FIRST", "TEST");
+        Call("AppendLog", "PERF_TEST_SECOND", "TEST");
+        Check(console.Text == string.Join("\r\n", (List<string>)Field("_consoleLogs")), "incremental log append retains complete ordered console text");
+        SetField("_activeTab", "optimization");
+        Call("RenderCurrentTab");
+        Check(Field("_liveConsoleTextBox") == null, "leaving monitor releases the detached console reference");
+    }
+
+    private static void CheckContrast()
+    {
+        foreach (var pair in new[] { new[] { "TextPrimary", "BgElevated" }, new[] { "TextSecondary", "BgElevated" }, new[] { "RiskLowText", "RiskLowBg" }, new[] { "RiskMedText", "RiskMedBg" }, new[] { "RiskHighText", "RiskHighBg" }, new[] { "CyberCyanBrush", "BgSurface" } })
+        {
+            double foreground = Luminance(((SolidColorBrush)Field(pair[0])).Color), background = Luminance(((SolidColorBrush)Field(pair[1])).Color);
+            double ratio = (Math.Max(foreground, background) + 0.05) / (Math.Min(foreground, background) + 0.05);
+            Check(ratio >= 4.5, "text contrast >= 4.5:1 for " + pair[0] + " / " + pair[1]);
+        }
+    }
+
+    private static void CheckAdaptiveCards()
+    {
+        Panel grid = (Panel)Activator.CreateInstance(_type.Assembly.GetType("Blackwall.AdaptiveCardGrid", true));
+        grid.Children.Add(new Border { Height = 40 }); grid.Children.Add(new Border { Height = 80 }); grid.Children.Add(new Border { Height = 30 });
+        grid.Measure(new Size(620, double.PositiveInfinity)); grid.Arrange(new Rect(0, 0, 620, grid.DesiredSize.Height));
+        Check(grid.DesiredSize.Height == 110, "card rows use their own height instead of stretching the entire catalog");
+        grid.Measure(new Size(310, double.PositiveInfinity)); grid.Arrange(new Rect(0, 0, 310, grid.DesiredSize.Height));
+        Check(grid.DesiredSize.Height == 150 && grid.Children[0].RenderSize.Width == 310, "narrow layout keeps full-width cards without horizontal overflow");
+        grid.Measure(new Size(930, double.PositiveInfinity)); grid.Arrange(new Rect(0, 0, 930, grid.DesiredSize.Height));
+        Check(grid.DesiredSize.Height == 80, "wider layout restores columns without replacing the controls");
+        grid.Children[1].Visibility = Visibility.Collapsed;
+        grid.Measure(new Size(620, double.PositiveInfinity)); grid.Arrange(new Rect(0, 0, 620, grid.DesiredSize.Height));
+        Check(grid.DesiredSize.Height == 40 && grid.Children[2].RenderSize.Width == 310, "filtered cards reflow without empty cells or oversized rows");
+        grid.Children[1].Visibility = Visibility.Visible;
+        grid.Measure(new Size(620, double.PositiveInfinity)); grid.Arrange(new Rect(0, 0, 620, grid.DesiredSize.Height));
+        Check(grid.DesiredSize.Height == 110, "clearing filters restores original row geometry");
     }
 
     private static void CheckVisualPreferences(string directory, string preferences)
@@ -240,7 +506,7 @@ internal static class NativeUiSelfCheck
         ((HashSet<string>)Field("_selectedApps")).Add("fixture-selection");
         Call("ToggleSidebar");
         scroll.UpdateLayout();
-        Check(((ColumnDefinition)Field("_sidebarColumn")).Width.Value == 72, "collapsed menu is 72 DIP");
+        Check(((Border)Field("_sidebarBorder")).Width == 72, "collapsed menu is 72 DIP");
         Check(Object.ReferenceEquals(page, scroll.Content) && scroll.VerticalOffset == offset, "menu toggle preserves page and scroll");
         Check((string)Field("_activeTab") == "optimization" && (string)Field("_optRiskScope") == "medium" && ((HashSet<string>)Field("_selectedApps")).Contains("fixture-selection"), "menu toggle preserves navigation, filters and app selection");
         Snapshot(directory, "native-compact-small.png", 1080, 700);
@@ -256,13 +522,13 @@ internal static class NativeUiSelfCheck
         }
         finally { restored.Close(); }
         Call("ToggleSidebar");
-        Check(((ColumnDefinition)Field("_sidebarColumn")).Width.Value == 248, "expanded menu restores 248 DIP");
+        Check(((Border)Field("_sidebarBorder")).Width == 248, "expanded menu restores 248 DIP");
         SetField("_optRiskScope", "all");
         ((HashSet<string>)Field("_selectedApps")).Remove("fixture-selection");
         ((Button)Field("_motionToggle")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         File.WriteAllText(preferences, "not json");
         Window corrupt = (Window)Activator.CreateInstance(_type, new object[] { preferences });
-        try { Check(!(bool)_type.GetField("_sidebarCollapsed", Private).GetValue(corrupt), "corrupt preferences use safe defaults"); }
+        try { Check((bool)_type.GetField("_sidebarCollapsed", Private).GetValue(corrupt), "corrupt preferences use safe defaults"); }
         finally { corrupt.Close(); }
     }
 
@@ -270,9 +536,10 @@ internal static class NativeUiSelfCheck
     {
         var fixture = new Dictionary<string, object> { { "id", "ui-only" }, { "title", "Título técnico largo" }, { "shortTitle", "Ajuste de prueba" }, { "summary", "Resumen breve" }, { "description", "Explicación completa" }, { "riskLevel", "high" }, { "riskWarning", "Consecuencia visible antes de actuar" } };
         Border card = (Border)Call("BuildTweakCard", fixture);
-        StackPanel body = (StackPanel)card.Child;
-        DockPanel header = (DockPanel)body.Children[0];
-        Check(!((Button)header.Children[0]).IsEnabled, "unknown tweak state disables the action");
+        Grid layout = (Grid)card.Child;
+        StackPanel body = (StackPanel)layout.Children[0];
+        DockPanel footer = (DockPanel)layout.Children[1];
+        Check(!((Button)footer.Children[0]).IsEnabled, "unknown tweak state disables the action");
         Button disclosure = null;
         StackPanel details = null;
         bool warningVisible = false;
@@ -304,7 +571,7 @@ internal static class NativeUiSelfCheck
         string old = "{\"lastUpdated\":\"2026-10-23T00:00:00Z\",\"tweaks\":[]}";
         string newer = "{\"lastUpdated\":\"2026-10-25T00:00:00Z\",\"tweaks\":[]}";
         Check((string)Call("SelectCatalog", embedded, old) == embedded, "stale OTA cache cannot override shipped short titles and catalog");
-        Check((string)Call("SelectCatalog", embedded, newer) == newer, "newer OTA catalog remains usable");
+        Check((string)Call("SelectCatalog", embedded, newer) == embedded, "unsigned newer catalogs cannot override the packaged catalog");
         Check((string)Call("SelectCatalog", embedded, "invalid") == embedded, "invalid cache falls back to embedded catalog");
         Check((string)Call("SelectCatalog", embedded, "{\"lastUpdated\":\"2026-10-25\"}") == embedded, "cache without catalog entries is rejected");
         Check(((ICollection)Field("_tweaks")).Count >= 45, "current catalog includes concise presentation fields");
@@ -333,6 +600,18 @@ internal static class NativeUiSelfCheck
         finally { Marshal.FreeHGlobal(pointer); }
     }
 
+    private static void CheckStartupRouting()
+    {
+        Type program = _type.Assembly.GetType("Blackwall.Program", true);
+        MethodInfo routing = program.GetMethod("RequiresElevation", BindingFlags.Static | BindingFlags.NonPublic);
+        Func<string[], bool> requires = args => (bool)routing.Invoke(null, new object[] { args });
+        Check(requires(new string[0]), "normal opening requests UAC before building the UI");
+        Check(!requires(new[] { "--ota-update", "1.4.2", new string('a', 64) }), "verified update handoff has an unelevated startup route");
+        Check(requires(new[] { "--ota-update", "invalid", new string('a', 64) }), "malformed update arguments do not enter the helper route");
+        Check(!requires(new[] { "--ota-health", "fixture", new string('a', 32) }), "update health confirmation runs before normal elevation");
+        Check(requires(new[] { "--ota-rollback", "fixture" }), "rollback reopening follows the normal permission flow");
+    }
+
     private static void CheckSmoothScrolling()
     {
         Type smoothType = _type.Assembly.GetType("Blackwall.SmoothScrollViewer", true);
@@ -347,7 +626,8 @@ internal static class NativeUiSelfCheck
         scroll.UpdateLayout();
         Check(scroll.ScrollableHeight > 0, "scroll fixture has content beyond the viewport");
         MethodInfo wheel = smoothType.GetMethod("OnMouseWheel", Private);
-        Func<int, MouseWheelEventArgs> input = delta => new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta) { RoutedEvent = Mouse.MouseWheelEvent };
+        int wheelTimestamp = 1000;
+        Func<int, MouseWheelEventArgs> input = delta => new MouseWheelEventArgs(Mouse.PrimaryDevice, wheelTimestamp += 200, delta) { RoutedEvent = Mouse.MouseWheelEvent };
         MouseWheelEventArgs down = input(-120);
         wheel.Invoke(scroll, new object[] { down });
         scroll.UpdateLayout();
@@ -355,7 +635,7 @@ internal static class NativeUiSelfCheck
         if (SystemParameters.ClientAreaAnimation && SystemParameters.WheelScrollLines != 0)
         {
             double firstTarget = (double)smoothType.GetField("_targetOffset", Private).GetValue(scroll);
-            Check(scroll.HasAnimatedProperties && firstTarget > 0, "wheel scroll uses an animation instead of an instant jump");
+            Check((bool)smoothType.GetField("_scrolling", Private).GetValue(scroll) && firstTarget > 0, "wheel input starts a single frame progression without an instant jump");
             PumpUntil(() => { scroll.UpdateLayout(); return scroll.VerticalOffset > 0; });
             Check(scroll.VerticalOffset < firstTarget, "scroll passes through intermediate offsets before reaching its target");
             PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
@@ -369,10 +649,37 @@ internal static class NativeUiSelfCheck
             wheel.Invoke(scroll, new object[] { input(-120000) });
             Check((double)smoothType.GetField("_targetOffset", Private).GetValue(scroll) == scroll.ScrollableHeight, "scroll target cannot exceed content bounds");
             smoothType.GetMethod("StopSmoothScroll", Private).Invoke(scroll, null);
-            Check(!scroll.HasAnimatedProperties, "direct scrollbar or keyboard input can stop animation");
+            Check(!(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll), "direct scrollbar or keyboard input stops the frame progression");
             scroll.Content = new Border { Height = 100 };
-            Check(!scroll.HasAnimatedProperties, "switching section content cancels old scroll motion");
+            Check(!(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll), "switching section content cancels old scroll motion");
         }
+        scroll.Content = new Border { Height = 4000, Width = 400 };
+        scroll.UpdateLayout(); scroll.ScrollToVerticalOffset(0); scroll.UpdateLayout();
+        double step = SystemParameters.WheelScrollLines < 0 ? scroll.ViewportHeight : SystemParameters.WheelScrollLines * 16.0;
+        for (int i = 0; i < 60; i++)
+            wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 10000 + i * 8, -6) { RoutedEvent = Mouse.MouseWheelEvent } });
+        Check(!scroll.HasAnimatedProperties, "precision touchpad burst allocates no repeated animation clocks");
+        PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
+        scroll.UpdateLayout();
+        Check(Math.Abs(scroll.VerticalOffset - Math.Min(scroll.ScrollableHeight, step * 3)) < 0.6, "touchpad deltas accumulate even before a layout frame");
+        wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 10480, 6) { RoutedEvent = Mouse.MouseWheelEvent } });
+        PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
+        scroll.UpdateLayout();
+        Check(Math.Abs(scroll.VerticalOffset - step * 2.95) < 0.6, "touchpad reversal responds without waiting for a tween");
+        for (int i = 0; i < 30; i++)
+            wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 11000 + i * 8, -120) { RoutedEvent = Mouse.MouseWheelEvent } });
+        Check(!scroll.HasAnimatedProperties, "quantized bursts use the same frame progression without repeated clocks");
+        PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
+        scroll.UpdateLayout();
+        Check(Math.Abs(scroll.VerticalOffset - Math.Min(scroll.ScrollableHeight, step * 32.95)) < 0.6, "switching from notches to a continuous gesture preserves the pending distance");
+        wheel.Invoke(scroll, new object[] { input(-18) });
+        scroll.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+        Check(!(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll), "unloading a section detaches its rendering progression");
+        smoothType.GetProperty("ReduceMotion").SetValue(scroll, true, null);
+        scroll.ScrollToVerticalOffset(0); scroll.UpdateLayout();
+        wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 12000, -6) { RoutedEvent = Mouse.MouseWheelEvent } });
+        scroll.UpdateLayout();
+        Check(!scroll.HasAnimatedProperties && Math.Abs(scroll.VerticalOffset - step * 0.05) < 0.6, "reduced motion preserves fractional touchpad movement");
         }
     }
 
@@ -382,7 +689,7 @@ internal static class NativeUiSelfCheck
     private static object Field(string name) { return _type.GetField(name, Private).GetValue(_window); }
     private static void SetField(string name, object value) { _type.GetField(name, Private).SetValue(_window, value); }
     private static object Call(string name, params object[] args) { return _type.GetMethod(name, Private).Invoke(_window, args); }
-    private static Task Read(string key, string label, Func<Task> read) { return (Task)Call("RunReadAsync", key, label, read); }
+    private static Task Read(string key, string label, Func<Task> read) { return (Task)Call("RunReadAsync", key, label, read, false); }
     private static void MarkLoaded(string key)
     {
         object loaded = Field("_loadedModules");
@@ -408,14 +715,14 @@ internal static class NativeUiSelfCheck
         }
     }
 
-    private static void Snapshot(string directory, string name, int width = 1400, int height = 880)
+    private static void Snapshot(string directory, string name, int width = 1400, int height = 880, FrameworkElement visual = null, double scale = 1)
     {
         Directory.CreateDirectory(directory);
-        FrameworkElement content = (FrameworkElement)_window.Content;
+        FrameworkElement content = visual ?? (FrameworkElement)_window.Content;
         content.Measure(new Size(width, height));
         content.Arrange(new Rect(0, 0, width, height));
         content.UpdateLayout();
-        RenderTargetBitmap image = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        RenderTargetBitmap image = new RenderTargetBitmap((int)(width * scale), (int)(height * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
         image.Render(content);
         PngBitmapEncoder encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));

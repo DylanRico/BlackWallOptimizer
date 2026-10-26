@@ -10,16 +10,7 @@ New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
 $references = @('WPF\PresentationFramework.dll', 'WPF\PresentationCore.dll', 'WPF\WindowsBase.dll', 'System.Xaml.dll', 'System.Web.Extensions.dll', 'System.Management.dll') |
     ForEach-Object { '/r:' + (Join-Path $frameworkFolder $_) }
 $previewExe = Join-Path $outputFolder 'Blackwall.preview.exe'
-$compileArgs = @('/nologo', '/target:winexe', '/optimize+', "/out:$previewExe", ('/win32icon:' + (Join-Path $projectRoot 'src-tauri\icons\icon.ico'))) + $references
-foreach ($catalog in @('tweaks', 'apps', 'version')) {
-    $compileArgs += '/resource:' + (Join-Path $projectRoot "catalogs\$catalog.json") + ",$catalog.json"
-}
-foreach ($icon in Get-ChildItem -LiteralPath (Join-Path $projectRoot 'assets\icons') -Filter '*.png') {
-    $compileArgs += '/resource:' + $icon.FullName + ',' + $icon.Name
-}
-$compileArgs += Join-Path $projectRoot 'native-wpf\BlackwallApp.cs'
-& $compiler @compileArgs
-if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación de Blackwall.' }
+& (Join-Path $PSScriptRoot 'Build-Preview.ps1') -OutputPath $previewExe
 
 $checkExe = Join-Path $outputFolder 'NativeUiSelfCheck.exe'
 $checkArgs = @('/nologo', '/target:exe', "/out:$checkExe") + $references + (Join-Path $projectRoot 'tests\NativeUiSelfCheck.cs')
@@ -31,4 +22,6 @@ if ($ScanHardware) { $runArgs += '--scan' }
 if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas WPF.' }
 & node --test (Join-Path $projectRoot 'tests\web-ui.test.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas web.' }
+& powershell.exe -NoProfile -File (Join-Path $projectRoot 'tests\Test-NativeBuild.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas del compilador nativo.' }
 Write-Output "Verificado: $previewExe"

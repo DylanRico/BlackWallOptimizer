@@ -10,6 +10,11 @@ if %errorLevel% neq 0 (
     exit /b 0
 )
 
+if exist "%~dp0Blackwall.exe" (
+    start "" "%~dp0Blackwall.exe"
+    exit /b 0
+)
+
 if exist "src-tauri\target\release\blackwall.exe" (
     start "" "src-tauri\target\release\blackwall.exe"
     exit /b 0

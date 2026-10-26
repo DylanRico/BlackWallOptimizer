@@ -38,8 +38,6 @@ using Microsoft.Win32;
 [assembly: AssemblyTrademark("Blackwall")]
 [assembly: ComVisible(false)]
 [assembly: Guid("9f8b4e3a-6c21-4d58-9b7a-1e4c8d9f0a2b")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace Blackwall
 {
@@ -50,27 +48,82 @@ namespace Blackwall
         {
             // Habilitar TLS 1.2 y TLS 1.3 para descargas HTTPS en cualquier instalación de Windows 10/11
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)3072;
-            CleanupOldOtaBinary();
+            if (args.Length > 0 && args[0] == "--ota-install") { Environment.ExitCode = OtaInstaller.Run(args); return; }
+            bool updateOnly = IsUpdateHelper(args);
+            if (updateOnly && OtaProtocol.Elevated())
+            {
+                MessageBox.Show("El actualizador necesita una sesión normal de Windows. Abre el Explorador sin Administrador y vuelve a intentarlo.", "Blackwall", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (!OtaProtocol.Elevated() && RequiresElevation(args))
+            {
+                try { Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, string.Join(" ", args.Select(OtaInstaller.Quote))) { UseShellExecute = true, Verb = "runas" }); }
+                catch (System.ComponentModel.Win32Exception ex) { if (ex.NativeErrorCode != 1223) MessageBox.Show("No se pudo iniciar Blackwall con permisos: " + ex.Message, "Blackwall"); }
+                return;
+            }
 
             Application app = new Application();
             MainWindow win = new MainWindow();
+            win.UpdateOnly = updateOnly;
+            if (updateOnly) { win.RequestedUpdateVersion = args[1]; win.RequestedUpdateHash = args[2]; win.Opacity = 0; win.ShowInTaskbar = false; }
+            win.Loaded += (s, e) =>
+            {
+                if (args.Length == 2 && args[0] == "--ota-rollback")
+                    try { win.ReportOtaRollback(OtaInstaller.CheckStage(args[1])); } catch { }
+            };
+            bool reported = false;
+            win.ContentRendered += async (s, e) =>
+            {
+                if (reported) return;
+                reported = true;
+                try
+                {
+                    OtaInstaller.ReportHealthy(args);
+                    if (args.Length == 3 && args[0] == "--ota-health" && !OtaProtocol.Elevated())
+                    {
+                        string result = Path.Combine(OtaInstaller.CheckStage(args[1]), "result.txt");
+                        for (int attempt = 0; attempt < 300 && !File.Exists(result); attempt++) await Task.Delay(100);
+                        if (win.IsVisible && File.Exists(result) && File.ReadAllText(result).StartsWith("OK:", StringComparison.Ordinal)) win.RelaunchAsAdministrator();
+                    }
+                }
+                catch { }
+            };
             app.Run(win);
         }
 
-        private static void CleanupOldOtaBinary()
+        internal static bool IsUpdateHelper(string[] args)
         {
+            Version version;
+            return args.Length == 3 && args[0] == "--ota-update" && Version.TryParse(args[1], out version) && Regex.IsMatch(args[1], @"^\d+\.\d+\.\d+$") && Regex.IsMatch(args[2], "^[a-f0-9]{64}$");
+        }
+
+        internal static bool RequiresElevation(string[] args)
+        {
+            return !IsUpdateHelper(args) && !(args.Length == 3 && args[0] == "--ota-health" && Regex.IsMatch(args[2], "^[a-f0-9]{32}$"));
+        }
+
+        internal static void LaunchUnelevated(string file, string arguments)
+        {
+            object windows = null, desktop = null, document = null, shell = null;
             try
             {
-                string currentExe = Process.GetCurrentProcess().MainModule.FileName;
-                string oldExe = currentExe + ".old";
-                if (File.Exists(oldExe)) File.Delete(oldExe);
+                windows = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39")));
+                desktop = windows.GetType().InvokeMember("FindWindowSW", BindingFlags.InvokeMethod, null, windows, new object[] { 0, null, 8, 0, 1 });
+                if (desktop == null) throw new InvalidOperationException("No se encontró el escritorio de Windows para abrir el actualizador sin elevación.");
+                document = desktop.GetType().InvokeMember("Document", BindingFlags.GetProperty, null, desktop, null);
+                shell = document.GetType().InvokeMember("Application", BindingFlags.GetProperty, null, document, null);
+                shell.GetType().InvokeMember("ShellExecute", BindingFlags.InvokeMethod, null, shell, new object[] { file, arguments, Path.GetDirectoryName(file), "open", 1 });
             }
-            catch { }
+            finally
+            {
+                foreach (object item in new[] { shell, document, desktop, windows }) if (item != null && Marshal.IsComObject(item)) Marshal.ReleaseComObject(item);
+            }
         }
     }
 
     public class SmoothScrollViewer : ScrollViewer
     {
+        public SmoothScrollViewer() { Unloaded += (s, e) => StopSmoothScroll(); }
         private bool _reduceMotion;
         public bool ReduceMotion
         {
@@ -79,39 +132,73 @@ namespace Blackwall
         }
         private double _targetOffset;
         private bool _scrolling;
-        private static readonly DependencyProperty AnimatedOffsetProperty = DependencyProperty.Register(
-            "AnimatedOffset", typeof(double), typeof(SmoothScrollViewer),
-            new PropertyMetadata(0.0, (d, e) => ((SmoothScrollViewer)d).ScrollToVerticalOffset((double)e.NewValue)));
+        private bool _directPending;
+        private readonly Stopwatch _scrollClock = new Stopwatch();
+        private double _lastFrameMilliseconds;
+        private double _renderOffset;
+        private TimeSpan _lastRenderingTime = TimeSpan.MinValue;
 
         protected override void OnMouseWheel(MouseWheelEventArgs e)
         {
             if (e.Handled) return;
-            if (ReduceMotion || !SystemParameters.ClientAreaAnimation || ScrollableHeight <= 0 || Keyboard.Modifiers != ModifierKeys.None)
+            if (e.Delta == 0) { e.Handled = true; return; }
+            if (ScrollableHeight <= 0 || Keyboard.Modifiers != ModifierKeys.None)
             {
                 StopSmoothScroll();
                 base.OnMouseWheel(e);
                 return;
             }
             double step = SystemParameters.WheelScrollLines < 0 ? ViewportHeight : SystemParameters.WheelScrollLines * 16.0;
+            if (ReduceMotion || !SystemParameters.ClientAreaAnimation)
+            {
+                double directOrigin = _directPending ? _targetOffset : VerticalOffset;
+                _targetOffset = Math.Max(0, Math.Min(ScrollableHeight, directOrigin - e.Delta / 120.0 * step));
+                _directPending = true;
+                ScrollToVerticalOffset(_targetOffset);
+                e.Handled = true;
+                return;
+            }
             double from = VerticalOffset;
             double origin = _scrolling && e.Delta * (_targetOffset - from) <= 0 ? _targetOffset : from;
+            if (!_scrolling || origin == from) _renderOffset = from;
             _targetOffset = Math.Max(0, Math.Min(ScrollableHeight, origin - e.Delta / 120.0 * step));
-            DoubleAnimation motion = new DoubleAnimation(from, _targetOffset, TimeSpan.FromMilliseconds(260))
+            if (!_scrolling)
             {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-            motion.Completed += (s, args) => _scrolling = false;
-            _scrolling = true;
-            BeginAnimation(AnimatedOffsetProperty, motion);
+                _scrolling = true;
+                _lastFrameMilliseconds = 0;
+                _lastRenderingTime = TimeSpan.MinValue;
+                _scrollClock.Restart();
+                CompositionTarget.Rendering += OnScrollFrame;
+            }
             e.Handled = true;
         }
 
-        private void StopSmoothScroll()
+        private void OnScrollFrame(object sender, EventArgs e)
         {
-            double offset = VerticalOffset;
+            var frame = e as RenderingEventArgs;
+            if (frame != null && frame.RenderingTime == _lastRenderingTime) return;
+            if (frame != null) _lastRenderingTime = frame.RenderingTime;
+            double now = _scrollClock.Elapsed.TotalMilliseconds;
+            double elapsed = Math.Min(50, Math.Max(0, now - _lastFrameMilliseconds));
+            _lastFrameMilliseconds = now;
+            double remaining = _targetOffset - _renderOffset;
+            if (Math.Abs(remaining) < 0.25)
+            {
+                ScrollToVerticalOffset(_targetOffset);
+                StopSmoothScroll();
+                return;
+            }
+            // One frame loop follows the accumulated input; event frequency never changes the scroll model.
+            _renderOffset += remaining * (1 - Math.Exp(-elapsed / 24.0));
+            ScrollToVerticalOffset(_renderOffset);
+        }
+
+        internal void StopSmoothScroll()
+        {
             _scrolling = false;
-            SetValue(AnimatedOffsetProperty, offset);
-            BeginAnimation(AnimatedOffsetProperty, null);
+            _directPending = false;
+            _scrollClock.Stop();
+            CompositionTarget.Rendering -= OnScrollFrame;
         }
 
         protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
@@ -131,11 +218,108 @@ namespace Blackwall
             StopSmoothScroll();
             base.OnContentChanged(oldContent, newContent);
         }
+
+        protected override void OnScrollChanged(ScrollChangedEventArgs e)
+        {
+            if (_directPending && Math.Abs(VerticalOffset - _targetOffset) < 0.001) _directPending = false;
+            base.OnScrollChanged(e);
+        }
+    }
+
+    public class MaterialCard : Border
+    {
+        private static readonly SolidColorBrush HighlightFill = CreateHighlightFill();
+        private static readonly Pen HighlightEdge = CreateHighlightEdge();
+        private static SolidColorBrush CreateHighlightFill() { var brush = new SolidColorBrush(Color.FromArgb(9, 231, 237, 247)); brush.Freeze(); return brush; }
+        private static Pen CreateHighlightEdge() { var pen = new Pen(new SolidColorBrush(Color.FromArgb(170, 231, 237, 247)), 1); pen.Freeze(); return pen; }
+        public Func<bool> Animate { get; set; }
+        private static readonly DependencyProperty HighlightProperty = DependencyProperty.Register("Highlight", typeof(double), typeof(MaterialCard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+        protected override void OnMouseEnter(MouseEventArgs e) { base.OnMouseEnter(e); Highlight(1); }
+        protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); Highlight(0); }
+        private void Highlight(double value)
+        {
+            double from = (double)GetValue(HighlightProperty);
+            SetValue(HighlightProperty, value);
+            BeginAnimation(HighlightProperty, Animate != null && Animate() ? new DoubleAnimation(from, value, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.Stop } : null);
+        }
+        public void StopMotion() { BeginAnimation(HighlightProperty, null); }
+        protected override void OnRender(DrawingContext drawing)
+        {
+            base.OnRender(drawing);
+            double highlight = (double)GetValue(HighlightProperty);
+            if (highlight <= 0 || ActualWidth < 34 || ActualHeight < 34) return;
+            drawing.PushOpacity(highlight);
+            drawing.DrawRoundedRectangle(HighlightFill, null, new Rect(1, 1, ActualWidth - 2, ActualHeight - 2), 15, 15);
+            drawing.DrawLine(HighlightEdge, new Point(17, 0.5), new Point(Math.Min(70, ActualWidth - 17), 0.5));
+            drawing.DrawLine(HighlightEdge, new Point(ActualWidth - 50, ActualHeight - 0.5), new Point(ActualWidth - 17, ActualHeight - 0.5));
+            drawing.Pop();
+        }
+    }
+
+    // Reflows existing cards without rebuilding them or losing selection and focus.
+    public class AdaptiveCardGrid : Panel
+    {
+        public int Columns { get; set; }
+        private double[] _rowHeights = new double[0];
+        private readonly List<UIElement> _layoutChildren = new List<UIElement>();
+        protected override Size MeasureOverride(Size available)
+        {
+            double width = double.IsInfinity(available.Width) ? 310 * Math.Max(1, Columns) : available.Width;
+            _layoutChildren.Clear();
+            foreach (UIElement child in Children) if (child.Visibility != Visibility.Collapsed) _layoutChildren.Add(child);
+            Columns = Math.Max(1, Math.Min(Math.Max(1, _layoutChildren.Count), Math.Min(4, (int)(width / 310))));
+            int rows = (_layoutChildren.Count + Columns - 1) / Columns;
+            if (_rowHeights.Length != rows) _rowHeights = new double[rows];
+            else Array.Clear(_rowHeights, 0, rows);
+            for (int i = 0; i < _layoutChildren.Count; i++)
+            {
+                _layoutChildren[i].Measure(new Size(width / Columns, double.PositiveInfinity));
+                _rowHeights[i / Columns] = Math.Max(_rowHeights[i / Columns], _layoutChildren[i].DesiredSize.Height);
+            }
+            return new Size(width, _rowHeights.Sum());
+        }
+        protected override Size ArrangeOverride(Size bounds)
+        {
+            double y = 0, width = bounds.Width / Math.Max(1, Columns);
+            for (int i = 0; i < _layoutChildren.Count; i++)
+            {
+                _layoutChildren[i].Arrange(new Rect((i % Columns) * width, y, width, _rowHeights[i / Columns]));
+                if (i % Columns == Columns - 1) y += _rowHeights[i / Columns];
+            }
+            return bounds;
+        }
+    }
+
+    // Static, local geometry: no ambient timer or network assets behind the content.
+    public class GraphiteNetwork : FrameworkElement
+    {
+        protected override void OnRender(DrawingContext drawing)
+        {
+            var pen = new Pen(new SolidColorBrush(Color.FromArgb(15, 142, 154, 172)), 1);
+            for (int y = 35; y < ActualHeight; y += 150)
+                for (int x = 25; x < ActualWidth; x += 210)
+                {
+                    Point a = new Point(x, y), b = new Point(x + 130, y + 48), c = new Point(x + 210, y - 18);
+                    drawing.DrawLine(pen, a, b); drawing.DrawLine(pen, b, c);
+                    drawing.DrawEllipse(pen.Brush, null, a, 2, 2);
+                    drawing.DrawEllipse(pen.Brush, null, b, 2, 2);
+                }
+        }
     }
 
     // A small isolated drawing surface keeps the moving circuit away from text/layout.
     public class EnergyTrace : FrameworkElement
     {
+        private static readonly Pen BasePen = CreatePen(Color.FromArgb(100, 143, 24, 40), 1);
+        private static readonly Pen HotPen = CreatePen(Color.FromArgb(210, 239, 104, 120), 1.4);
+        private static readonly SolidColorBrush[] ChargeInk = CreateChargeInk();
+        private static Pen CreatePen(Color color, double width) { var pen = new Pen(new SolidColorBrush(color), width); pen.Freeze(); return pen; }
+        private static SolidColorBrush[] CreateChargeInk()
+        {
+            var brushes = new SolidColorBrush[8];
+            for (int i = 0; i < brushes.Length; i++) { brushes[i] = new SolidColorBrush(Color.FromArgb((byte)(190 - i * 22), 255, 91, 121)); brushes[i].Freeze(); }
+            return brushes;
+        }
         private readonly DispatcherTimer _timer;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         public bool Vertical { get; set; }
@@ -160,8 +344,6 @@ namespace Blackwall
             double cross = Vertical ? ActualWidth : ActualHeight;
             if (length <= 0 || cross <= 0) return;
             double time = Running ? _clock.Elapsed.TotalSeconds : 0;
-            var basePen = new Pen(new SolidColorBrush(Color.FromArgb(100, 143, 24, 40)), 1);
-            var hotPen = new Pen(new SolidColorBrush(Color.FromArgb(210, 239, 104, 120)), 1.4);
             Func<double, double, Point> point = (along, across) => Vertical ? new Point(across, along) : new Point(along, across);
             Point previous = point(0, cross / 2);
             for (int i = 1; i <= 36; i++)
@@ -169,7 +351,7 @@ namespace Blackwall
                 double along = length * i / 36;
                 double offset = i % 4 == 0 ? cross * 0.26 : i % 4 == 1 ? -cross * 0.26 : 0;
                 Point next = point(along, cross / 2 + offset);
-                drawing.DrawLine(basePen, previous, next);
+                drawing.DrawLine(BasePen, previous, next);
                 previous = next;
             }
             if (!Running) return;
@@ -180,10 +362,9 @@ namespace Blackwall
                 {
                     double position = head - tail * 4;
                     if (position < 0) continue;
-                    var ink = new SolidColorBrush(Color.FromArgb((byte)(190 - tail * 22), 255, 91, 121));
-                    drawing.DrawEllipse(ink, null, point(position, cross / 2 + Math.Sin(position / length * Math.PI * 12) * cross * 0.18), tail == 0 ? 2.4 : 1.4, tail == 0 ? 2.4 : 1.4);
+                    drawing.DrawEllipse(ChargeInk[tail], null, point(position, cross / 2 + Math.Sin(position / length * Math.PI * 12) * cross * 0.18), tail == 0 ? 2.4 : 1.4, tail == 0 ? 2.4 : 1.4);
                 }
-                drawing.DrawLine(hotPen, point(Math.Max(0, head - 14), cross / 2), point(head, cross / 2));
+                drawing.DrawLine(HotPen, point(Math.Max(0, head - 14), cross / 2), point(head, cross / 2));
             }
         }
     }
@@ -216,6 +397,10 @@ namespace Blackwall
         private string _optDeviceScope = "auto";
         private string _optRiskScope = "all";
         private string _appCategoryScope = "Todas";
+        private string _tweakSearchText = "";
+        private string _appSearchText = "";
+        private TextBox _sectionSearch;
+        private Button _installSelectedButton;
         private bool _autoRestorePoint = true;
         private bool _preferDirectHttpsDownload = false;
 
@@ -228,7 +413,14 @@ namespace Blackwall
         private Dictionary<string, Dictionary<string, object>> _installedApps = new Dictionary<string, Dictionary<string, object>>();
         private HashSet<string> _selectedApps = new HashSet<string>();
         private Dictionary<string, object> _versionInfo = null;
+        private OtaRelease _availableRelease;
+        private string _announcedRelease;
+        private Window _otaDialog;
+        internal bool UpdateOnly;
+        internal string RequestedUpdateVersion, RequestedUpdateHash;
         private List<Dictionary<string, object>> _liveScripts = new List<Dictionary<string, object>>();
+        private bool _monitorProcessesChanged;
+        private readonly Dictionary<int, TextBlock> _monitorProcessMemoryLabels = new Dictionary<int, TextBlock>();
         private List<Dictionary<string, object>> _restorePoints = new List<Dictionary<string, object>>();
         private List<string> _consoleLogs = new List<string>();
 
@@ -240,6 +432,9 @@ namespace Blackwall
         private TextBox _omniboxInput;
         private Popup _omniboxPopup;
         private StackPanel _omniboxResultsPanel;
+        private readonly List<Button> _omniboxItems = new List<Button>();
+        private int _omniboxSelected = -1;
+        private string _pendingSearchId;
         private Button _themeBtn;
         private Button _otaBtn;
         private TextBlock _maximizeIconText;
@@ -266,10 +461,15 @@ namespace Blackwall
         private Button _activityDismiss;
 
         private readonly string _preferencesPath;
-        private bool _sidebarCollapsed;
+        private bool _sidebarCollapsed = true;
         private bool _reduceMotion;
+        private readonly HashSet<string> _pendingTweaks = new HashSet<string>();
+        private readonly HashSet<string> _uiActions = new HashSet<string>();
+        private readonly Dictionary<string, string> _tweakActionErrors = new Dictionary<string, string>();
+        private Func<Dictionary<string, object>, bool, Task> _executeTweakAction;
         private ColumnDefinition _sidebarColumn;
         private Border _sidebarBorder;
+        private Border _sidebarScrim;
         private Button _sidebarToggle;
         private Button _motionToggle;
         private readonly List<FrameworkElement> _expandedSidebarElements = new List<FrameworkElement>();
@@ -286,7 +486,7 @@ namespace Blackwall
         private static readonly DependencyProperty SidebarWidthProperty = DependencyProperty.Register("SidebarWidth", typeof(double), typeof(MainWindow), new PropertyMetadata(248.0, (d, e) =>
         {
             var window = (MainWindow)d;
-            if (window._sidebarColumn != null) window._sidebarColumn.Width = new GridLength((double)e.NewValue);
+            if (window._sidebarBorder != null) window._sidebarBorder.Width = (double)e.NewValue;
         }));
         private bool MotionAllowed { get { return !_reduceMotion && SystemParameters.ClientAreaAnimation; } }
 
@@ -295,6 +495,7 @@ namespace Blackwall
         public MainWindow(string preferencesPath)
         {
             _preferencesPath = preferencesPath;
+            _executeTweakAction = ExecuteTweakAsync;
             LoadUiPreferences();
             bool isAdmin = IsAdministrator();
             Title = "Blackwall — Muro Negro" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
@@ -334,16 +535,16 @@ namespace Blackwall
                 }
             };
 
-            _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [ARQUITECTURA] Motor 100% Nativo Win32/.NET activo (Cero invocaciones a PowerShell / Compatible con Antivirus y SmartScreen).");
+            _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [ARQUITECTURA] Interfaz WPF/.NET y herramientas nativas de Windows disponibles.");
             _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [PRIVILEGIOS] Sesión actual ejecutándose como: " + (isAdmin ? "Administrador Elevado (UAC Activo)" : "Usuario Estándar"));
 
             LoadEmbeddedCatalogs();
             UpdateThemeBrushes();
             BuildShellUI();
             InitializeActivityPanel();
-            Activated += (s, e) => UpdateAmbientMotion();
-            Deactivated += (s, e) => UpdateAmbientMotion();
-            StateChanged += (s, e) => UpdateAmbientMotion();
+            Activated += (s, e) => { UpdateAmbientMotion(); AnnounceAvailableUpdate(); };
+            Deactivated += (s, e) => { foreach (var viewer in _scrollViewers) viewer.StopSmoothScroll(); UpdateAmbientMotion(); };
+            StateChanged += (s, e) => { if (WindowState == WindowState.Minimized) foreach (var viewer in _scrollViewers) viewer.StopSmoothScroll(); UpdateAmbientMotion(); };
             SystemParameters.StaticPropertyChanged += OnSystemMotionChanged;
             Closed += (s, e) =>
             {
@@ -365,24 +566,30 @@ namespace Blackwall
                 }
                 else if (e.Key == Key.Escape && _omniboxPopup != null)
                 {
+                    bool searchOpen = _omniboxPopup.IsOpen;
                     _omniboxPopup.IsOpen = false;
+                    if (searchOpen) _omniboxInput.Focus();
+                    else if (!_sidebarCollapsed) ToggleSidebar();
+                    e.Handled = true;
                 }
             };
 
             this.Loaded += async (s, e) =>
             {
+                if (UpdateOnly) { ShowOtaUpdateDialog(); Application.Current.Shutdown(); return; }
                 TriggerLogoGlitch();
                 RenderCurrentTab();
                 await Dispatcher.Yield(DispatcherPriority.Background);
+                var updateCheck = CheckRemoteOtaAsync(true);
                 await RefreshHardwareNativeAsync();
             };
 
             _scriptMonitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             _scriptMonitorTimer.Tick += async (s, e) =>
             {
-                if (_activeTab == "monitor" && !_readTasks.ContainsKey("monitor") && !_readErrors.ContainsKey("monitor"))
+                if (WindowState != WindowState.Minimized && _activeTab == "monitor" && !_readTasks.ContainsKey("monitor") && !_readErrors.ContainsKey("monitor"))
                 {
-                    await RefreshLiveScriptsNativeAsync();
+                    await RefreshLiveScriptsNativeAsync(true);
                 }
             };
             _scriptMonitorTimer.Start();
@@ -394,7 +601,7 @@ namespace Blackwall
             {
                 if (!File.Exists(_preferencesPath)) return;
                 var settings = _json.Deserialize<Dictionary<string, object>>(File.ReadAllText(_preferencesPath));
-                _sidebarCollapsed = GetBool(settings, "sidebarCollapsed");
+                if (settings.ContainsKey("sidebarCollapsed")) _sidebarCollapsed = GetBool(settings, "sidebarCollapsed");
                 _reduceMotion = GetBool(settings, "reduceMotion");
                 if (settings.ContainsKey("dark")) _isDark = GetBool(settings, "dark");
             }
@@ -439,18 +646,24 @@ namespace Blackwall
             {
                 StopEntrances();
                 BeginAnimation(SidebarWidthProperty, null);
-                _sidebarColumn.Width = new GridLength(_sidebarCollapsed ? 72 : 248);
+                _sidebarBorder.Width = _sidebarCollapsed ? 72 : 248;
                 _mainScroll.BeginAnimation(OpacityProperty, null);
                 _mainScroll.RenderTransform = Transform.Identity;
                 FrameworkElement page = _mainScroll.Content as FrameworkElement;
-                if (page != null) { page.BeginAnimation(OpacityProperty, null); page.RenderTransform = Transform.Identity; }
+                if (page != null)
+                {
+                    page.BeginAnimation(OpacityProperty, null); page.RenderTransform = Transform.Identity;
+                    foreach (var card in MotionCards(page).OfType<MaterialCard>()) card.StopMotion();
+                }
                 _logoBox.BeginAnimation(OpacityProperty, null);
                 foreach (var button in _motionButtons)
                 {
                     var frame = button.Template.FindName("Frame", button) as Border;
                     var sheen = button.Template.FindName("Sheen", button) as Border;
                     if (frame != null) frame.RenderTransform = Transform.Identity;
-                    if (sheen != null) sheen.Background = null;
+                    if (sheen != null) { sheen.Background = null; sheen.BorderBrush = null; }
+                    var scale = button.RenderTransform as ScaleTransform;
+                    if (scale != null) { scale.BeginAnimation(ScaleTransform.ScaleXProperty, null); scale.BeginAnimation(ScaleTransform.ScaleYProperty, null); }
                 }
             }
             UpdateAmbientMotion();
@@ -459,13 +672,12 @@ namespace Blackwall
 
         private void UpdateAmbientMotion()
         {
-            bool running = MotionAllowed && IsActive && WindowState != WindowState.Minimized;
-            if (_headerEnergy != null) _headerEnergy.SetRunning(running);
-            if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(running);
+            // The material remains visible at rest; decoration does not need an idle render loop.
+            if (_headerEnergy != null) _headerEnergy.SetRunning(false);
+            if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(false);
             if (_logoHalo != null)
             {
                 _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, null);
-                if (running) _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, new DoubleAnimation(3, 14, TimeSpan.FromSeconds(2)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
             }
         }
 
@@ -525,13 +737,13 @@ namespace Blackwall
             int index = 0;
             foreach (var card in _pageMotionCards)
             {
-                if (_revealedCards.Contains(card) || card.ActualHeight <= 0) continue;
+                if (card.Visibility == Visibility.Collapsed || _revealedCards.Contains(card) || card.ActualHeight <= 0) continue;
                 Point position;
                 try { position = card.TransformToAncestor(_mainScroll).Transform(new Point(0, 0)); }
                 catch (InvalidOperationException) { continue; }
                 if (position.Y + card.ActualHeight <= 0 || position.Y >= _mainScroll.ActualHeight) continue;
                 _revealedCards.Add(card);
-                double delay = Math.Min(index++ * 38, 380);
+                double delay = Math.Min(index++ * 12, 36);
                 var translate = new TranslateTransform();
                 var scale = new ScaleTransform(1, 1);
                 var transforms = new TransformGroup();
@@ -540,16 +752,15 @@ namespace Blackwall
                 card.RenderTransformOrigin = new Point(0.5, 0.5);
                 card.RenderTransform = transforms;
                 var slide = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
-                slide.KeyFrames.Add(new LinearDoubleKeyFrame(30, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                slide.KeyFrames.Add(new LinearDoubleKeyFrame(30, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
-                slide.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 460)), new BackEase { Amplitude = 0.18, EasingMode = EasingMode.EaseOut }));
+                slide.KeyFrames.Add(new LinearDoubleKeyFrame(3, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                slide.KeyFrames.Add(new LinearDoubleKeyFrame(3, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
+                slide.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 135)), new CubicEase { EasingMode = EasingMode.EaseOut }));
                 translate.BeginAnimation(TranslateTransform.YProperty, slide);
                 var reveal = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
-                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
-                reveal.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 300)), new CubicEase { EasingMode = EasingMode.EaseOut }));
+                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0.82, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                reveal.KeyFrames.Add(new LinearDoubleKeyFrame(0.82, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay))));
+                reveal.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(delay + 135)), new CubicEase { EasingMode = EasingMode.EaseOut }));
                 card.BeginAnimation(OpacityProperty, reveal);
-                scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.975, 1, TimeSpan.FromMilliseconds(delay + 460)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
                 _motionEntrances.Add(card);
             }
         }
@@ -586,33 +797,38 @@ namespace Blackwall
             var brush = new LinearGradientBrush();
             brush.StartPoint = new Point(0, 0);
             brush.EndPoint = new Point(1, 0.4);
-            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.15));
-            brush.GradientStops.Add(new GradientStop(Color.FromArgb(100, 255, 150, 174), 0.5));
-            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.85));
+            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.40));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(_isDark ? (byte)230 : (byte)90, 231, 237, 247), 0.5));
+            brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.60));
             var sweep = new TranslateTransform();
             brush.RelativeTransform = sweep;
-            sheen.Background = brush;
-            sweep.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-1.3, 1.3, TimeSpan.FromMilliseconds(650)));
+            sheen.Background = null;
+            sheen.BorderBrush = brush;
+            var reflection = new DoubleAnimation(-1.3, 1.3, TimeSpan.FromMilliseconds(520)) { FillBehavior = FillBehavior.Stop };
+            reflection.Completed += (s, e) => { if (sheen.BorderBrush == brush) sheen.BorderBrush = null; };
+            sweep.BeginAnimation(TranslateTransform.XProperty, reflection);
             var lift = frame.RenderTransform as TranslateTransform;
             if (lift == null) { lift = new TranslateTransform(); frame.RenderTransform = lift; }
-            lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(lift.Y, -2, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(lift.Y, -1, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
         }
 
         private void ToggleSidebar()
         {
-            double from = _sidebarColumn.Width.Value;
+            double from = _sidebarBorder.Width;
             _sidebarCollapsed = !_sidebarCollapsed;
             ApplySidebarState();
             SaveUiPreferences();
             double target = _sidebarCollapsed ? 72 : 248;
             SetValue(SidebarWidthProperty, target);
             if (MotionAllowed)
-                BeginAnimation(SidebarWidthProperty, new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(420)) { EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop });
+                BeginAnimation(SidebarWidthProperty, new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(210)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop });
         }
 
         private void ApplySidebarState()
         {
-            _sidebarColumn.Width = new GridLength(_sidebarCollapsed ? 72 : 248);
+            _sidebarColumn.Width = new GridLength(72);
+            _sidebarBorder.Width = _sidebarCollapsed ? 72 : 248;
+            if (_sidebarScrim != null) _sidebarScrim.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             _sidebarBorder.Padding = new Thickness(_sidebarCollapsed ? 8 : 14, 16, _sidebarCollapsed ? 8 : 14, 16);
             foreach (var element in _expandedSidebarElements) element.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             foreach (var button in _navButtons.Values)
@@ -685,7 +901,7 @@ namespace Blackwall
             catch { return false; }
         }
 
-        private void RelaunchAsAdministrator()
+        internal void RelaunchAsAdministrator()
         {
             try
             {
@@ -710,48 +926,16 @@ namespace Blackwall
         // ====================================================================
         private string ReadEmbeddedResource(string resourceName, string fallbackDiskRelativePath)
         {
-            try
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
             {
-                Assembly asm = Assembly.GetExecutingAssembly();
-                using (Stream st = asm.GetManifestResourceStream(resourceName))
-                {
-                    if (st != null)
-                    {
-                        using (StreamReader sr = new StreamReader(st, Encoding.UTF8))
-                        {
-                            string embedded = sr.ReadToEnd();
-                            if (resourceName == "tweaks.json" || resourceName == "apps.json")
-                            {
-                                string cached = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs", resourceName);
-                                try { if (File.Exists(cached)) return SelectCatalog(embedded, File.ReadAllText(cached, Encoding.UTF8)); }
-                                catch (Exception ex) { AppendLog("No se pudo leer el catálogo local: " + ex.Message, "CATÁLOGO"); }
-                            }
-                            return embedded;
-                        }
-                    }
-                }
+                if (stream == null) throw new InvalidDataException("Falta el catálogo embebido " + resourceName);
+                using (var reader = new StreamReader(stream, Encoding.UTF8)) return reader.ReadToEnd();
             }
-            catch { }
-
-            string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fallbackDiskRelativePath);
-            if (File.Exists(fullPath))
-                return File.ReadAllText(fullPath, Encoding.UTF8);
-            return "";
         }
 
         private string SelectCatalog(string embedded, string cached)
         {
-            try
-            {
-                var bundled = _json.Deserialize<Dictionary<string, object>>(embedded);
-                var local = _json.Deserialize<Dictionary<string, object>>(cached);
-                DateTime bundledDate, localDate;
-                string entries = bundled.ContainsKey("tweaks") ? "tweaks" : "apps";
-                if (!local.ContainsKey(entries) || !(local[entries] is IEnumerable)) return embedded;
-                if (DateTime.TryParse(GetStr(bundled, "lastUpdated"), out bundledDate) && DateTime.TryParse(GetStr(local, "lastUpdated"), out localDate) && localDate > bundledDate) return cached;
-            }
-            catch { }
-            // A stale OTA cache must not replace the newer catalog shipped in this executable.
+            // Legacy cache is unsigned; only catalogs covered by the executable's OTA signature are used.
             return embedded;
         }
 
@@ -845,30 +1029,31 @@ namespace Blackwall
             return _activeTab == "optimization" || _activeTab == "debloat" ? "tweaks" : _activeTab;
         }
 
-        private Task RunReadAsync(string key, string label, Func<Task> read)
+        private Task RunReadAsync(string key, string label, Func<Task> read, bool background = false)
         {
             Task pending;
             if (_readTasks.TryGetValue(key, out pending)) return pending;
             _readErrors.Remove(key);
             _readLabels[key] = label;
             _readProgress.Remove(key);
-            Task task = CompleteReadAsync(key, read);
+            Task task = CompleteReadAsync(key, read, background);
             _readTasks[key] = task;
-            UpdateActivityPanel();
+            if (!background) UpdateActivityPanel();
             return task;
         }
 
-        private async Task CompleteReadAsync(string key, Func<Task> read)
+        private async Task CompleteReadAsync(string key, Func<Task> read, bool background)
         {
             await Task.Yield();
             try
             {
                 await read();
                 _loadedModules.Add(key);
-                if (key != "hardware") SetStatus("Lectura completada: " + _readLabels[key], "Listo");
+                if (key != "hardware" && !background) SetStatus("Lectura completada: " + _readLabels[key], "Listo");
             }
             catch (Exception ex)
             {
+                background = false;
                 _readErrors[key] = ex.Message;
                 AppendLog(_readLabels[key] + ": " + ex.Message, "ERROR");
                 SetStatus("No se pudo completar " + _readLabels[key].ToLowerInvariant(), "Reintento disponible");
@@ -876,8 +1061,8 @@ namespace Blackwall
             finally
             {
                 _readTasks.Remove(key);
-                if (CurrentModuleKey() == key) RenderCurrentTab();
-                UpdateActivityPanel();
+                if (CurrentModuleKey() == key && (!background || key != "monitor" || _monitorProcessesChanged)) RenderCurrentTab();
+                if (!background) UpdateActivityPanel();
             }
         }
 
@@ -1403,9 +1588,9 @@ namespace Blackwall
 
         }
 
-        private Task RefreshLiveScriptsNativeAsync()
+        private Task RefreshLiveScriptsNativeAsync(bool background = false)
         {
-            return RunReadAsync("monitor", "Monitor de procesos", RefreshLiveScriptsCoreAsync);
+            return RunReadAsync("monitor", "Monitor de procesos", RefreshLiveScriptsCoreAsync, background);
         }
 
         private async Task RefreshLiveScriptsCoreAsync()
@@ -1435,9 +1620,23 @@ namespace Blackwall
                         { "startedAt", "En ejecución" }
                     });
                 }
+                string previous = string.Join("\n", _liveScripts.OrderBy(p => GetInt(p, "pid")).Select(p => GetStr(p, "pid") + "|" + GetStr(p, "name") + "|" + GetStr(p, "commandLine")));
+                string current = string.Join("\n", list.OrderBy(p => GetInt(p, "pid")).Select(p => GetStr(p, "pid") + "|" + GetStr(p, "name") + "|" + GetStr(p, "commandLine")));
+                _monitorProcessesChanged = previous != current;
                 _liveScripts = list;
             });
+            if (!_monitorProcessesChanged) UpdateMonitorProcessMemoryLabels();
 
+        }
+
+        private void UpdateMonitorProcessMemoryLabels()
+        {
+            foreach (var process in _liveScripts)
+            {
+                TextBlock label;
+                if (_monitorProcessMemoryLabels.TryGetValue(GetInt(process, "pid"), out label))
+                    label.Text = "PID " + GetStr(process, "pid") + "  •  " + GetStr(process, "name") + "  •  Parent PID: " + GetStr(process, "parentPid") + "  •  RAM: " + GetStr(process, "memoryMb") + " MB";
+            }
         }
 
         private Task RefreshRestorePointsNativeAsync()
@@ -1843,7 +2042,7 @@ namespace Blackwall
             }
             else
             {
-                AppendLog("Nota: Para crear Puntos de Restauración, ejecuta Blackwall como Administrador (Botón 'Elevar a Admin').", "WARN");
+                AppendLog("Para crear puntos de restauración, vuelve a abrir Blackwall y acepta la autorización de Windows.", "WARN");
                 SetStatus("🟡 Requiere permisos de Administrador para crear Punto de Restauración", "Aviso");
             }
             await RefreshRestorePointsNativeAsync();
@@ -2009,48 +2208,63 @@ namespace Blackwall
             if (BgApp == null)
             {
                 // Primera inicialización de pinceles
-                BgApp = BrushHex(_isDark ? "#08080B" : "#F3F1F2");
-                BgSidebar = BrushHex(_isDark ? "#0C0C10" : "#FAF8F9");
-                BgSurface = BrushHex(_isDark ? "#111114" : "#FFFFFF");
-                BgElevated = BrushHex(_isDark ? "#201A20" : "#EEE7E9");
-                BorderSubtle = BrushHex(_isDark ? "#353039" : "#D5C9CE");
-                TextPrimary = BrushHex(_isDark ? "#F3F4F6" : "#231B20");
-                TextSecondary = BrushHex(_isDark ? "#B8BBC4" : "#62565F");
+                BgApp = BrushHex(_isDark ? "#090B10" : "#D1D6DE");
+                BgSidebar = BrushHex(_isDark ? "#0D1016" : "#DADEE4");
+                BgSurface = BrushHex(_isDark ? "#141820" : "#DFE3E8");
+                BgElevated = BrushHex(_isDark ? "#1C222D" : "#C2CAD4");
+                BorderSubtle = BrushHex(_isDark ? "#424C5D" : "#748294");
+                TextPrimary = BrushHex(_isDark ? "#EEF2F7" : "#24303E");
+                TextSecondary = BrushHex(_isDark ? "#A7B0BF" : "#465464");
                 AccentBrush = BrushHex(_isDark ? "#8F1828" : "#8F1828");
-                CyberCyanBrush = BrushHex(_isDark ? "#EF6878" : "#9E2339");
-                CyberYellowBrush = BrushHex(_isDark ? "#EF6878" : "#9E2339");
-                RiskLowBg = BrushHex(_isDark ? "#0B1E19" : "#E6F7F0");
-                RiskLowText = BrushHex(_isDark ? "#8BD8B5" : "#206545");
-                RiskMedBg = BrushHex(_isDark ? "#2A2207" : "#FFF8E1");
-                RiskMedText = BrushHex(_isDark ? "#E8C080" : "#825007");
-                RiskHighBg = BrushHex(_isDark ? "#2B0A11" : "#FDE8EA");
-                RiskHighText = BrushHex(_isDark ? "#FF8998" : "#C8102E");
+                CyberCyanBrush = BrushHex(_isDark ? "#FF8B80" : "#873A36");
+                CyberYellowBrush = BrushHex(_isDark ? "#FF8B80" : "#873A36");
+                RiskLowBg = BrushHex(_isDark ? "#0B1E19" : "#CCDCD2");
+                RiskLowText = BrushHex(_isDark ? "#8BD8B5" : "#235C3C");
+                RiskMedBg = BrushHex(_isDark ? "#2A2207" : "#DCD2BC");
+                RiskMedText = BrushHex(_isDark ? "#E8C080" : "#6B4C15");
+                RiskHighBg = BrushHex(_isDark ? "#2B0A11" : "#E5CDD1");
+                RiskHighText = BrushHex(_isDark ? "#FF8998" : "#9F283D");
             }
             else
             {
                 // Mutación reactiva en caliente sin destruir el árbol visual
-                BgApp.Color = ColorHex(_isDark ? "#08080B" : "#F3F1F2");
-                BgSidebar.Color = ColorHex(_isDark ? "#0C0C10" : "#FAF8F9");
-                BgSurface.Color = ColorHex(_isDark ? "#111114" : "#FFFFFF");
-                BgElevated.Color = ColorHex(_isDark ? "#201A20" : "#EEE7E9");
-                BorderSubtle.Color = ColorHex(_isDark ? "#353039" : "#D5C9CE");
-                TextPrimary.Color = ColorHex(_isDark ? "#F3F4F6" : "#231B20");
-                TextSecondary.Color = ColorHex(_isDark ? "#B8BBC4" : "#62565F");
+                BgApp.Color = ColorHex(_isDark ? "#090B10" : "#D1D6DE");
+                BgSidebar.Color = ColorHex(_isDark ? "#0D1016" : "#DADEE4");
+                BgSurface.Color = ColorHex(_isDark ? "#141820" : "#DFE3E8");
+                BgElevated.Color = ColorHex(_isDark ? "#1C222D" : "#C2CAD4");
+                BorderSubtle.Color = ColorHex(_isDark ? "#424C5D" : "#748294");
+                TextPrimary.Color = ColorHex(_isDark ? "#EEF2F7" : "#24303E");
+                TextSecondary.Color = ColorHex(_isDark ? "#A7B0BF" : "#465464");
                 AccentBrush.Color = ColorHex(_isDark ? "#8F1828" : "#8F1828");
-                CyberCyanBrush.Color = ColorHex(_isDark ? "#EF6878" : "#9E2339");
-                CyberYellowBrush.Color = ColorHex(_isDark ? "#EF6878" : "#9E2339");
-                RiskLowBg.Color = ColorHex(_isDark ? "#0B1E19" : "#E6F7F0");
-                RiskLowText.Color = ColorHex(_isDark ? "#8BD8B5" : "#206545");
-                RiskMedBg.Color = ColorHex(_isDark ? "#2A2207" : "#FFF8E1");
-                RiskMedText.Color = ColorHex(_isDark ? "#E8C080" : "#825007");
-                RiskHighBg.Color = ColorHex(_isDark ? "#2B0A11" : "#FDE8EA");
-                RiskHighText.Color = ColorHex(_isDark ? "#FF8998" : "#C8102E");
+                CyberCyanBrush.Color = ColorHex(_isDark ? "#FF8B80" : "#873A36");
+                CyberYellowBrush.Color = ColorHex(_isDark ? "#FF8B80" : "#873A36");
+                RiskLowBg.Color = ColorHex(_isDark ? "#0B1E19" : "#CCDCD2");
+                RiskLowText.Color = ColorHex(_isDark ? "#8BD8B5" : "#235C3C");
+                RiskMedBg.Color = ColorHex(_isDark ? "#2A2207" : "#DCD2BC");
+                RiskMedText.Color = ColorHex(_isDark ? "#E8C080" : "#6B4C15");
+                RiskHighBg.Color = ColorHex(_isDark ? "#2B0A11" : "#E5CDD1");
+                RiskHighText.Color = ColorHex(_isDark ? "#FF8998" : "#9F283D");
             }
             // WPF may freeze template resources; keep the mutable palette outside that dictionary.
             Resources["CyberFocusBrush"] = CyberCyanBrush.Clone();
             Resources["CyberTrackBrush"] = BorderSubtle.Clone();
             Resources[SystemColors.HighlightBrushKey] = CyberCyanBrush.Clone();
             Resources[SystemColors.HighlightTextBrushKey] = BgSidebar.Clone();
+            Resources["MaterialSurface"] = MaterialGradient(_isDark ? "#202630" : "#E3E6EB", _isDark ? "#141820" : "#D4DAE2");
+            Resources["MaterialButtonSurface"] = MaterialGradient(_isDark ? "#303947" : "#D9DEE6", _isDark ? "#141920" : "#BCC6D3");
+            Resources["MaterialSilver"] = MaterialGradient(_isDark ? "#F4F7FC" : "#CBD3DE", _isDark ? "#AAB6C7" : "#AAB7C8");
+            var edge = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            edge.GradientStops.Add(new GradientStop(ColorHex(_isDark ? "#B3BECE" : "#B8C2CE"), 0));
+            edge.GradientStops.Add(new GradientStop(ColorHex(_isDark ? "#424C5D" : "#8A96A5"), 0.19));
+            edge.GradientStops.Add(new GradientStop(ColorHex(_isDark ? "#252D39" : "#C5CCD5"), 0.55));
+            edge.GradientStops.Add(new GradientStop(ColorHex(_isDark ? "#8E9AAC" : "#8E9AAC"), 0.88));
+            edge.GradientStops.Add(new GradientStop(ColorHex(_isDark ? "#303A49" : "#BCC7D6"), 1));
+            Resources["MaterialEdge"] = edge;
+        }
+
+        private LinearGradientBrush MaterialGradient(string top, string bottom)
+        {
+            return new LinearGradientBrush(ColorHex(top), ColorHex(bottom), new Point(0, 0), new Point(0, 1));
         }
 
         private void TriggerLogoGlitch()
@@ -2137,24 +2351,28 @@ namespace Blackwall
             Resources[typeof(Button)] = (Style)System.Windows.Markup.XamlReader.Parse(@"
                 <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
                        xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>
-                    <Setter Property='MinHeight' Value='32'/>
+                    <Setter Property='MinHeight' Value='38'/>
+                    <Setter Property='BorderBrush' Value='{DynamicResource MaterialEdge}'/>
+                    <Setter Property='BorderThickness' Value='1'/>
                     <Setter Property='Template'>
                         <Setter.Value><ControlTemplate TargetType='Button'>
-                            <Border x:Name='Frame' Background='{TemplateBinding Background}'
+                            <Border x:Name='Frame'
                                 BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'
-                                CornerRadius='0,0,7,0' Padding='{TemplateBinding Padding}' SnapsToDevicePixels='True'>
-                                <Grid ClipToBounds='True'>
-                                    <ContentPresenter HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}'
-                                        VerticalAlignment='Center' RecognizesAccessKey='True'/>
-                                    <Border x:Name='Sheen' IsHitTestVisible='False'/>
+                                CornerRadius='20' SnapsToDevicePixels='True'>
+                                <Grid>
+                                    <Border Background='{TemplateBinding Background}' BorderBrush='#26FFFFFF' BorderThickness='0,1,0,0' CornerRadius='19' Padding='{TemplateBinding Padding}'>
+                                        <ContentPresenter HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}'
+                                            VerticalAlignment='Center' RecognizesAccessKey='True'/>
+                                    </Border>
+                                    <Border x:Name='Hover' Background='#0EFFFFFF' Opacity='0' CornerRadius='19' IsHitTestVisible='False'/>
+                                    <Border x:Name='Sheen' BorderThickness='1.4' Margin='-1' CornerRadius='20' IsHitTestVisible='False'/>
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
-                                <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.85'/></Trigger>
-                                <Trigger Property='IsPressed' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.62'/></Trigger>
+                                <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='1'/></Trigger>
+                                <Trigger Property='IsPressed' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.72'/></Trigger>
                                 <Trigger Property='IsKeyboardFocused' Value='True'>
                                     <Setter TargetName='Frame' Property='BorderBrush' Value='{DynamicResource CyberFocusBrush}'/>
-                                    <Setter TargetName='Frame' Property='BorderThickness' Value='2'/>
                                 </Trigger>
                                 <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.4'/></Trigger>
                             </ControlTemplate.Triggers>
@@ -2208,7 +2426,7 @@ namespace Blackwall
             };
 
             Grid topGrid = new Grid();
-            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(230) });
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(172) });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -2293,7 +2511,7 @@ namespace Blackwall
                 Background = BgSurface,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0, 0, 7, 0),
+                CornerRadius = new CornerRadius(18),
                 Height = 35,
                 Padding = new Thickness(10, 0, 10, 0)
             };
@@ -2333,9 +2551,15 @@ namespace Blackwall
             };
             WindowChrome.SetIsHitTestVisibleInChrome(_omniboxInput, true);
             _omniboxInput.TextChanged += OnOmniboxTextChanged;
+            _omniboxInput.PreviewKeyDown += OnOmniboxKeyDown;
+            _omniboxInput.ToolTip = "Buscar hardware, ajustes y software · Ctrl+K";
+            System.Windows.Automation.AutomationProperties.SetName(_omniboxInput, "Buscar en Blackwall");
             omniDock.Children.Add(_omniboxInput);
             omniBorder.Child = omniDock;
             omniboxContainer.Children.Add(omniBorder);
+            var searchHint = new TextBlock { Text = "Buscar en Blackwall", Foreground = TextSecondary, FontSize = 12, Margin = new Thickness(34, 0, 76, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, IsHitTestVisible = false };
+            omniboxContainer.Children.Add(searchHint);
+            _omniboxInput.TextChanged += (s, e) => searchHint.Visibility = string.IsNullOrEmpty(_omniboxInput.Text) ? Visibility.Visible : Visibility.Collapsed;
 
             _omniboxPopup = new Popup
             {
@@ -2345,12 +2569,14 @@ namespace Blackwall
                 AllowsTransparency = true,
                 Width = 520
             };
+            _omniboxPopup.Resources.MergedDictionaries.Add(Resources);
+            omniBorder.SizeChanged += (s, e) => _omniboxPopup.Width = Math.Max(300, omniBorder.ActualWidth);
             Border popupBorder = new Border
             {
                 Background = BgSurface,
                 BorderBrush = AccentBrush,
                 BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(0, 0, 10, 0),
+                CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(8),
                 Margin = new Thickness(0, 4, 0, 0)
             };
@@ -2371,18 +2597,10 @@ namespace Blackwall
             StackPanel actionsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             WindowChrome.SetIsHitTestVisibleInChrome(actionsStack, true);
 
-            if (!IsAdministrator())
-            {
-                Button adminBtn = CreateStyledButton("Administrador", false);
-                adminBtn.Margin = new Thickness(0, 0, 6, 0);
-                adminBtn.Click += (s, e) => RelaunchAsAdministrator();
-                actionsStack.Children.Add(adminBtn);
-            }
-
             Button rpBtn = CreateStyledButton("Restauración", false);
             rpBtn.ToolTip = "Crear un punto de restauración de Windows";
             rpBtn.Margin = new Thickness(0, 0, 6, 0);
-            rpBtn.Click += async (s, e) => await CreateRestorePointNowAsync();
+            rpBtn.Click += async (s, e) => await RunUiActionAsync("restore", rpBtn, () => CreateRestorePointNowAsync());
             actionsStack.Children.Add(rpBtn);
 
             _otaBtn = CreateStyledButton("Actualizaciones", false);
@@ -2434,10 +2652,19 @@ namespace Blackwall
             Grid.SetRow(topBar, 0);
             _rootGrid.Children.Add(topBar);
             _headerEnergy = new EnergyTrace { Height = 12, VerticalAlignment = VerticalAlignment.Bottom };
+            _headerEnergy.Visibility = Visibility.Collapsed;
             _rootGrid.Children.Add(_headerEnergy);
 
             // 2. CUERPO CENTRAL
             Grid bodyGrid = new Grid();
+            var network = new GraphiteNetwork { IsHitTestVisible = false, ClipToBounds = true };
+            Grid.SetColumnSpan(network, 2);
+            bodyGrid.Children.Add(network);
+            _sidebarScrim = new Border { Background = Brushes.Black, Opacity = 0.28, Visibility = Visibility.Collapsed };
+            Grid.SetColumnSpan(_sidebarScrim, 2);
+            Panel.SetZIndex(_sidebarScrim, 15);
+            _sidebarScrim.MouseLeftButtonUp += (s, e) => { if (!_sidebarCollapsed) ToggleSidebar(); };
+            bodyGrid.Children.Add(_sidebarScrim);
             _sidebarColumn = new ColumnDefinition { Width = new GridLength(248) };
             bodyGrid.ColumnDefinitions.Add(_sidebarColumn);
             bodyGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -2486,7 +2713,7 @@ namespace Blackwall
                 Background = BgSurface,
                 BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0, 0, 10, 0),
+                CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(13)
             };
             StackPanel infoStack = new StackPanel();
@@ -2519,19 +2746,18 @@ namespace Blackwall
 
             sidebarBorder.Child = sidebarDock;
             Grid.SetColumn(sidebarBorder, 0);
+            Grid.SetColumnSpan(sidebarBorder, 2);
+            sidebarBorder.HorizontalAlignment = HorizontalAlignment.Left;
+            Panel.SetZIndex(sidebarBorder, 20);
             bodyGrid.Children.Add(sidebarBorder);
             _sidebarEnergy = new EnergyTrace { Width = 8, Vertical = true, HorizontalAlignment = HorizontalAlignment.Left };
+            _sidebarEnergy.Visibility = Visibility.Collapsed;
             bodyGrid.Children.Add(_sidebarEnergy);
 
             _mainScroll = CreateSmoothScroller();
             _mainScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             _mainScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
             _mainScroll.Padding = new Thickness(28, 24, 24, 24);
-            _mainScroll.ScrollChanged += (s, e) =>
-            {
-                var page = _mainScroll.Content as FrameworkElement;
-                if (e.VerticalChange != 0 && page != null) RevealVisibleCards(page);
-            };
             Grid.SetColumn(_mainScroll, 1);
             bodyGrid.Children.Add(_mainScroll);
 
@@ -2549,8 +2775,8 @@ namespace Blackwall
             DockPanel footerDock = new DockPanel { LastChildFill = false };
             _statusText = new TextBlock
             {
-                Text = "●  SISTEMA LISTO",
-                Foreground = CyberCyanBrush,
+                Text = "○  AUDITORÍA PENDIENTE",
+                Foreground = TextSecondary,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontSize = 11.5,
                 FontWeight = FontWeights.SemiBold
@@ -2638,10 +2864,11 @@ namespace Blackwall
             };
             System.Windows.Automation.AutomationProperties.SetName(btn, title);
             ToolTip navigationTip = new ToolTip { Content = title, PlacementTarget = btn, Placement = PlacementMode.Right };
+            ToolTipService.SetInitialShowDelay(btn, 350);
+            ToolTipService.SetShowDuration(btn, 1000);
+            ToolTipService.SetBetweenShowDelay(btn, 350);
             btn.ToolTip = navigationTip;
-            btn.GotKeyboardFocus += (s, e) => { if (_sidebarCollapsed) navigationTip.IsOpen = true; };
-            btn.LostKeyboardFocus += (s, e) => navigationTip.IsOpen = false;
-            btn.Click += (s, e) => SwitchTab(tabKey);
+            btn.Click += (s, e) => { navigationTip.IsOpen = false; SwitchTab(tabKey); if (!_sidebarCollapsed) ToggleSidebar(); };
             _navButtons[tabKey] = btn;
             parent.Children.Add(btn);
         }
@@ -2680,6 +2907,8 @@ namespace Blackwall
             }
 
             _omniboxResultsPanel.Children.Clear();
+            _omniboxItems.Clear();
+            _omniboxSelected = -1;
             int count = 0;
 
             if (_hardware != null)
@@ -2719,7 +2948,8 @@ namespace Blackwall
                 {
                     string cat = GetStr(t, "category") == "optimization" ? "optimization" : "debloat";
                     string risk = GetStr(t, "riskLevel").ToUpperInvariant();
-                    AddOmniboxResultItem("⚡ " + title, sub + " — " + desc, "Riesgo " + risk, () => SwitchTab(cat));
+                    string tweakId = GetStr(t, "id");
+                    AddOmniboxResultItem(title, sub + " — " + desc, "Riesgo " + risk, () => OpenSearchTarget(cat, tweakId));
                     count++;
                 }
             }
@@ -2733,10 +2963,9 @@ namespace Blackwall
                 if (name.ToLowerInvariant().Contains(q) || desc.ToLowerInvariant().Contains(q) || wg.ToLowerInvariant().Contains(q))
                 {
                     string appId = GetStr(a, "id");
-                    AddOmniboxResultItem("📦 Instalar " + name, GetStr(a, "category") + " • " + wg, "App Silenciosa", () =>
+                    AddOmniboxResultItem(name, GetStr(a, "category") + " • " + wg, "Software", () =>
                     {
-                        _selectedApps.Add(appId);
-                        SwitchTab("apps");
+                        OpenSearchTarget("apps", appId);
                     });
                     count++;
                 }
@@ -2753,37 +2982,81 @@ namespace Blackwall
             }
 
             _omniboxPopup.IsOpen = true;
+            SelectOmniboxResult(_omniboxItems.Count > 0 ? 0 : -1);
+        }
+
+        private void OnOmniboxKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Down || e.Key == Key.Up)
+            {
+                if (!_omniboxPopup.IsOpen) OnOmniboxTextChanged(_omniboxInput, null);
+                if (_omniboxItems.Count > 0) SelectOmniboxResult((_omniboxSelected + (e.Key == Key.Down ? 1 : -1) + _omniboxItems.Count) % _omniboxItems.Count);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter && _omniboxPopup.IsOpen && _omniboxSelected >= 0)
+            {
+                _omniboxItems[_omniboxSelected].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                e.Handled = true;
+            }
+        }
+
+        private void SelectOmniboxResult(int index)
+        {
+            _omniboxSelected = index;
+            for (int i = 0; i < _omniboxItems.Count; i++)
+            {
+                _omniboxItems[i].Background = i == index ? BgElevated : Brushes.Transparent;
+                _omniboxItems[i].BorderBrush = i == index ? CyberCyanBrush : Brushes.Transparent;
+            }
+            if (index >= 0) _omniboxItems[index].BringIntoView();
+        }
+
+        private void OpenSearchTarget(string tab, string id)
+        {
+            _pendingSearchId = id;
+            if (tab == "apps") { _appCategoryScope = "Todas"; _appSearchText = ""; }
+            else { _optDeviceScope = "all"; _optRiskScope = "all"; _tweakSubcategoryScope = "Todas"; _tweakSearchText = ""; }
+            SwitchTab(tab);
         }
 
         private void AddOmniboxResultItem(string title, string subtitle, string badge, Action onClick)
         {
-            Border itemBorder = new Border
+            Button itemBorder = new Button
             {
                 Background = Brushes.Transparent,
-                CornerRadius = new CornerRadius(6),
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Padding = new Thickness(10, 7, 10, 7),
                 Cursor = Cursors.Hand
             };
-            itemBorder.MouseEnter += (s, e) => itemBorder.Background = BgElevated;
-            itemBorder.MouseLeave += (s, e) => itemBorder.Background = Brushes.Transparent;
+            int index = _omniboxItems.Count;
+            itemBorder.MouseEnter += (s, e) => SelectOmniboxResult(index);
+            itemBorder.GotKeyboardFocus += (s, e) => SelectOmniboxResult(index);
+            System.Windows.Automation.AutomationProperties.SetName(itemBorder, title + ". " + badge);
 
             DockPanel dp = new DockPanel();
             Border pill = CreateBadge(badge, "low");
+            pill.Background = BgElevated;
+            pill.BorderBrush = BorderSubtle;
+            ((TextBlock)pill.Child).Foreground = TextSecondary;
             DockPanel.SetDock(pill, Dock.Right);
             dp.Children.Add(pill);
 
             StackPanel sp = new StackPanel();
-            sp.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.SemiBold, FontSize = 12.8 });
+            sp.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.SemiBold, FontSize = 12.8, TextWrapping = TextWrapping.Wrap });
             sp.Children.Add(new TextBlock { Text = subtitle, Foreground = TextSecondary, FontSize = 11.2, TextTrimming = TextTrimming.CharacterEllipsis });
             dp.Children.Add(sp);
 
-            itemBorder.Child = dp;
-            itemBorder.MouseLeftButtonUp += (s, e) =>
+            itemBorder.Content = dp;
+            itemBorder.Click += (s, e) =>
             {
                 _omniboxPopup.IsOpen = false;
                 _omniboxInput.Text = "";
                 onClick();
+                _omniboxInput.Focus();
             };
+            _omniboxItems.Add(itemBorder);
             _omniboxResultsPanel.Children.Add(itemBorder);
         }
 
@@ -2793,7 +3066,16 @@ namespace Blackwall
         private void RenderCurrentTab()
         {
             if (_mainScroll == null) return;
+            double previousOffset = _mainScroll.VerticalOffset;
+            bool sameSection = _lastRenderedTab == _activeTab;
+            bool restoreSearch = sameSection && _sectionSearch != null && _sectionSearch.IsKeyboardFocusWithin;
+            int selectionStart = restoreSearch ? _sectionSearch.SelectionStart : 0;
+            int selectionLength = restoreSearch ? _sectionSearch.SelectionLength : 0;
             _tweakCardUpdaters.Clear();
+            _sectionSearch = null;
+            _installSelectedButton = null;
+            _liveConsoleTextBox = null;
+            _monitorProcessMemoryLabels.Clear();
 
             UIElement content = null;
             string moduleKey = CurrentModuleKey();
@@ -2833,14 +3115,30 @@ namespace Blackwall
                 _motionPage = null;
                 _pageMotionCards.Clear();
                 _mainScroll.Content = centeredWrap;
+                if (sameSection) _mainScroll.ScrollToVerticalOffset(previousOffset);
+                if (restoreSearch && _sectionSearch != null)
+                {
+                    TextBox search = _sectionSearch;
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                    {
+                        if (_mainScroll.Content != centeredWrap) return;
+                        search.Focus(); search.Select(Math.Min(selectionStart, search.Text.Length), Math.Min(selectionLength, search.Text.Length - Math.Min(selectionStart, search.Text.Length)));
+                    }));
+                }
                 bool ready = moduleKey == "hardware" ? _hardware != null : _loadedModules.Contains(moduleKey);
                 if (_lastRenderedTab != _activeTab || (!_lastRenderedReady && ready))
                 {
-                    AnimateEntrance(centeredWrap, 16, 360);
                     Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => AnimatePage(centeredWrap)));
                 }
                 _lastRenderedTab = _activeTab;
                 _lastRenderedReady = ready;
+                string target = _pendingSearchId;
+                if (target != null) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                {
+                    if (_mainScroll.Content != centeredWrap) return;
+                    var card = MotionCards(centeredWrap).FirstOrDefault(c => Convert.ToString(c.Tag) == target);
+                    if (card != null) { card.BringIntoView(); _pendingSearchId = null; }
+                }));
             }
             if (!_loadedModules.Contains(moduleKey) && !_readErrors.ContainsKey(moduleKey))
                 LoadModuleAsync(moduleKey);
@@ -2853,6 +3151,7 @@ namespace Blackwall
         private UIElement BuildHardwareView()
         {
             StackPanel root = new StackPanel();
+            root.Children.Add(BuildDashboardSummary());
 
             if (_hardware == null)
             {
@@ -2898,7 +3197,7 @@ namespace Blackwall
                 headerActions
             ));
 
-            UniformGrid row1 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
+            AdaptiveCardGrid row1 = new AdaptiveCardGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
 
             row1.Children.Add(CreateKvCard("🏷️ 1. Identificación OEM y Chasis", GetStr(chassis, "deviceType"), new[,]
             {
@@ -2944,11 +3243,12 @@ namespace Blackwall
                 Text = "⚡ 4. Memoria RAM — Detalle General y por Slot Físico (" + GetStr(mem, "occupiedSlots") + " de " + GetStr(mem, "totalSlots") + " Slots Ocupados — Total: " + GetStr(mem, "totalGb") + " GB " + GetStr(mem, "memoryType") + " @ " + GetStr(mem, "speedMhz") + " MHz)",
                 Foreground = TextPrimary,
                 FontWeight = FontWeights.Bold,
-                FontSize = 14.5
+                FontSize = 14.5,
+                TextWrapping = TextWrapping.Wrap
             });
             ramStack.Children.Add(ramHeader);
 
-            UniformGrid slotsGrid = new UniformGrid { Columns = 2 };
+            AdaptiveCardGrid slotsGrid = new AdaptiveCardGrid { Columns = 2 };
             var slots = ConvertToDictList(mem.ContainsKey("slots") ? mem["slots"] : null);
             foreach (var s in slots)
             {
@@ -2968,7 +3268,7 @@ namespace Blackwall
             ramCard.Child = ramStack;
             root.Children.Add(ramCard);
 
-            UniformGrid row3 = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
+            AdaptiveCardGrid row3 = new AdaptiveCardGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
 
             var d0 = storageList.Count > 0 ? storageList[0] : new Dictionary<string, object>();
             row3.Children.Add(CreateKvCard("💿 5. Almacenamiento & S.M.A.R.T.", storageList.Count + " Unidad(es)", new[,]
@@ -3025,6 +3325,77 @@ namespace Blackwall
         // --------------------------------------------------------------------
         private string _tweakSubcategoryScope = "Todas";
 
+        private UIElement BuildDashboardSummary()
+        {
+            var card = CreateCardContainer();
+            card.Margin = new Thickness(0, 0, 0, 20);
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock { Text = "TU EQUIPO · TU CONTROL", Foreground = CyberCyanBrush, FontSize = 11, FontWeight = FontWeights.SemiBold });
+            content.Children.Add(new TextBlock { Text = "Centro de control", Foreground = TextPrimary, FontSize = 30, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 8) });
+            content.Children.Add(new TextBlock { Text = _hardware == null ? "La auditoría está pendiente. Puedes explorar las herramientas mientras termina la lectura." : "Auditoría de hardware disponible · " + GetStr(_hardware, "scannedAt") + ". Captura puntual del equipo, sin telemetría continua.", Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, FontSize = 13 });
+            if (_hardware != null)
+            {
+            var metrics = new AdaptiveCardGrid { Margin = new Thickness(0, 20, 0, 8) };
+            metrics.Children.Add(CreateKvCard("Comprobación de ajustes", "CATÁLOGO", new[,] { { "Estados consultados", _loadedModules.Contains("tweaks") ? _tweakStates.Count + " de " + _tweaks.Count : "Pendiente de consulta" }, { "Criterio", "Detección del catálogo; no mide salud ni rendimiento" } }));
+            metrics.Children.Add(CreateKvCard("Hardware", "AUDITORÍA", new[,] { { "Procesador", _hardware == null ? "Pendiente" : GetStr(GetDict(_hardware, "cpu"), "name") }, { "Memoria instalada", _hardware == null ? "Pendiente" : GetStr(GetDict(_hardware, "memory"), "totalGb") + " GB" } }));
+            metrics.Children.Add(CreateKvCard("Recuperación", "WINDOWS", new[,] { { "Puntos consultados", _loadedModules.Contains("safety") ? _restorePoints.Count.ToString() : "Pendiente de consulta" }, { "Antes de aplicar", _autoRestorePoint ? "Solicitud de punto de restauración activada" : "Solicitud automática desactivada" } }));
+            content.Children.Add(metrics);
+            }
+            else content.Children.Add(new TextBlock { Text = "Datos de hardware: pendientes de lectura · Estados de ajustes y recuperación: consulta cada sección.", Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 16) });
+            var shortcuts = new WrapPanel();
+            foreach (var destination in new[] { new[] { "optimization", "Revisar ajustes" }, new[] { "apps", "Software" }, new[] { "safety", "Restauración" }, new[] { "monitor", "Logs y tareas" } })
+            {
+                string tab = destination[0];
+                var button = CreateStyledButton(destination[1], tab == "optimization");
+                button.Margin = new Thickness(0, 0, 8, 8);
+                button.Click += (s, e) => SwitchTab(tab);
+                shortcuts.Children.Add(button);
+            }
+            content.Children.Add(shortcuts);
+            card.Child = content;
+            return card;
+        }
+
+        private UIElement CreateSectionSearch(string value, Action<string> changed)
+        {
+            var field = new TextBox { Text = value, Background = BgSurface, Foreground = TextPrimary, CaretBrush = TextPrimary, BorderBrush = BorderSubtle, Padding = new Thickness(14, 10, 14, 10), FontSize = 13, Margin = new Thickness(0, 0, 0, 12), ToolTip = "Filtrar esta sección por nombre o descripción" };
+            _sectionSearch = field;
+            System.Windows.Automation.AutomationProperties.SetName(field, "Filtrar esta sección");
+            field.Margin = new Thickness(0);
+            field.BorderThickness = new Thickness(0);
+            field.Background = Brushes.Transparent;
+            var container = new Grid();
+            container.Children.Add(field);
+            var hint = new TextBlock { Text = "Filtrar por nombre o descripción…", Foreground = TextSecondary, FontSize = 13, Margin = new Thickness(15, 0, 15, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false, Visibility = string.IsNullOrEmpty(value) ? Visibility.Visible : Visibility.Collapsed };
+            container.Children.Add(hint);
+            field.TextChanged += (s, e) => { hint.Visibility = string.IsNullOrEmpty(field.Text) ? Visibility.Visible : Visibility.Collapsed; changed(field.Text); };
+            var frame = new Border { Child = container, Background = BgSurface, BorderBrush = BorderSubtle, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(18), Margin = new Thickness(0, 0, 0, 12) };
+            return frame;
+        }
+
+        // Filter existing controls so keyboard composition, focus and action handlers survive each keystroke.
+        private Func<string, int> CreateCardFilter(Panel panel, IEnumerable<Dictionary<string, object>> items, Func<Dictionary<string, object>, UIElement> build, params string[] fields)
+        {
+            var entries = new List<KeyValuePair<UIElement, string>>();
+            foreach (var item in items)
+            {
+                var card = build(item);
+                panel.Children.Add(card);
+                entries.Add(new KeyValuePair<UIElement, string>(card, string.Join(" ", fields.Select(field => GetStr(item, field)))));
+            }
+            return query =>
+            {
+                int count = 0;
+                foreach (var entry in entries)
+                {
+                    bool visible = entry.Value.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                    entry.Key.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                    if (visible) count++;
+                }
+                return count;
+            };
+        }
+
         private async Task ApplyBlackwallPackAsync(string packId, string packLabel)
         {
             await CreateRestorePointNowAsync();
@@ -3055,7 +3426,7 @@ namespace Blackwall
             topBtns.Children.Add(recheckBtn);
 
             Button applyProfileBtn = CreateStyledButton("Perfil de riesgo bajo (" + (isLaptop ? "Laptop" : "Desktop") + ")", true);
-            applyProfileBtn.Click += async (s, e) => await ApplyRecommendedSafeProfileAsync(isLaptop ? "laptop" : "desktop");
+            applyProfileBtn.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", applyProfileBtn, () => ApplyRecommendedSafeProfileAsync(isLaptop ? "laptop" : "desktop"));
             topBtns.Children.Add(applyProfileBtn);
 
             root.Children.Add(CreateBanner(
@@ -3085,29 +3456,29 @@ namespace Blackwall
             {
                 Button btnTitus = CreateStyledButton("Esenciales · riesgo bajo", true);
                 btnTitus.Margin = new Thickness(0, 0, 8, 6);
-                btnTitus.Click += async (s, e) => await ApplyBlackwallPackAsync("titus_essential", "Chris Titus Essential");
+                btnTitus.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnTitus, () => ApplyBlackwallPackAsync("titus_essential", "Chris Titus Essential"));
                 packBtns.Children.Add(btnTitus);
 
                 Button btnPrivacy = CreateStyledButton("IA y privacidad · riesgo bajo", false);
                 btnPrivacy.Margin = new Thickness(0, 0, 8, 6);
-                btnPrivacy.Click += async (s, e) => await ApplyBlackwallPackAsync("privacy_ai", "Anti-IA & Privacidad");
+                btnPrivacy.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnPrivacy, () => ApplyBlackwallPackAsync("privacy_ai", "Anti-IA & Privacidad"));
                 packBtns.Children.Add(btnPrivacy);
 
                 Button btnServices = CreateStyledButton("Servicios · precaución", false);
                 btnServices.Margin = new Thickness(0, 0, 8, 6);
-                btnServices.Click += async (s, e) => await ApplyBlackwallPackAsync("services_light", "Servicios Ligeros");
+                btnServices.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnServices, () => ApplyBlackwallPackAsync("services_light", "Servicios Ligeros"));
                 packBtns.Children.Add(btnServices);
             }
             else
             {
                 Button btnCeito = CreateStyledButton("Juego y respuesta · precaución", true);
                 btnCeito.Margin = new Thickness(0, 0, 8, 6);
-                btnCeito.Click += async (s, e) => await ApplyBlackwallPackAsync("ceito_gaming", "Ceito Gaming & Baja Latencia");
+                btnCeito.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnCeito, () => ApplyBlackwallPackAsync("ceito_gaming", "Ceito Gaming & Baja Latencia"));
                 packBtns.Children.Add(btnCeito);
 
                 Button btnPower = CreateStyledButton("Energía (" + (isLaptop ? "Laptop Batería/Térmico" : "Desktop Ultimate") + ")", false);
                 btnPower.Margin = new Thickness(0, 0, 8, 6);
-                btnPower.Click += async (s, e) => await ApplyBlackwallPackAsync("adaptive_power", "Energía Adaptativa");
+                btnPower.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnPower, () => ApplyBlackwallPackAsync("adaptive_power", "Energía Adaptativa"));
                 packBtns.Children.Add(btnPower);
             }
             packStack.Children.Add(packBtns);
@@ -3160,6 +3531,7 @@ namespace Blackwall
             }
 
             StackPanel tweaksContainer = new StackPanel();
+            var filters = new List<Func<string, int>>();
 
             if (_tweakSubcategoryScope == "Todas")
             {
@@ -3216,25 +3588,31 @@ namespace Blackwall
                     };
                     groupSection.Children.Add(divider);
 
-                    UniformGrid groupGrid = new UniformGrid { Columns = 2 };
-                    foreach (var t in tweaksInSubcat)
+                    AdaptiveCardGrid groupGrid = new AdaptiveCardGrid { Columns = 2 };
+                    var filterGroup = CreateCardFilter(groupGrid, tweaksInSubcat, BuildTweakCard, "title", "description");
+                    filters.Add(query =>
                     {
-                        groupGrid.Children.Add(BuildTweakCard(t));
-                    }
+                        int count = filterGroup(query);
+                        groupSection.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
+                        ((TextBlock)countBadge.Child).Text = count + (count == 1 ? " optimización" : " optimizaciones");
+                        return count;
+                    });
                     groupSection.Children.Add(groupGrid);
                     tweaksContainer.Children.Add(groupSection);
                 }
             }
             else
             {
-                UniformGrid singleGrid = new UniformGrid { Columns = 2 };
-                foreach (var t in matchingTweaks)
-                {
-                    singleGrid.Children.Add(BuildTweakCard(t));
-                }
+                AdaptiveCardGrid singleGrid = new AdaptiveCardGrid { Columns = 2 };
+                filters.Add(CreateCardFilter(singleGrid, matchingTweaks, BuildTweakCard, "title", "description"));
                 tweaksContainer.Children.Add(singleGrid);
             }
 
+            var empty = CreateBanner("Sin resultados", "Prueba otro texto o cambia los filtros de riesgo, equipo o categoría.");
+            tweaksContainer.Children.Add(empty);
+            Action<string> applyFilter = query => { int count = 0; foreach (var filter in filters) count += filter(query); empty.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed; };
+            root.Children.Add(CreateSectionSearch(_tweakSearchText, value => { _tweakSearchText = value; applyFilter(value); }));
+            applyFilter(_tweakSearchText);
             root.Children.Add(tweaksContainer);
             return root;
         }
@@ -3255,8 +3633,9 @@ namespace Blackwall
             bool stateKnown = _hardware != null && _loadedModules.Contains("tweaks") && _tweakStates.ContainsKey(id);
 
             Border card = CreateCardContainer();
+            card.Tag = id;
             card.Margin = new Thickness(0, 0, 12, 12);
-            card.BorderBrush = isApplied ? AccentBrush : BorderSubtle;
+
 
             StackPanel sp = new StackPanel();
 
@@ -3267,12 +3646,12 @@ namespace Blackwall
             switchButton.IsEnabled = stateKnown;
             switchButton.ToolTip = "Cambiar el estado de " + shortTitle;
             System.Windows.Automation.AutomationProperties.SetName(switchButton, (isApplied ? "Revertir " : "Aplicar ") + shortTitle);
-            DockPanel.SetDock(switchButton, Dock.Right);
-            header.Children.Add(switchButton);
+            switchButton.IsEnabled = stateKnown && !_pendingTweaks.Contains(id);
+            if (_pendingTweaks.Contains(id)) switchButton.Content = isApplied ? "Revirtiendo…" : "Aplicando…";
 
             // Badges en la cabecera
             WrapPanel badgesPanel = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
-            string riskText = risk == "low" ? "RIESGO BAJO" : risk == "medium" ? "PRECAUCIÓN" : "RIESGO ALTO";
+            string riskText = risk == "low" ? "◇ RIESGO BAJO" : risk == "medium" ? "⚠ PRECAUCIÓN" : "⚠ RIESGO ALTO";
             Border riskBadge = CreateBadge(riskText, risk);
             riskBadge.Margin = new Thickness(0, 0, 6, 2);
             badgesPanel.Children.Add(riskBadge);
@@ -3468,20 +3847,29 @@ namespace Blackwall
                 Foreground = isApplied ? RiskLowText : TextSecondary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 11.5,
+                TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            if (_tweakActionErrors.ContainsKey(id)) { statusText.Text = "No se completó: " + _tweakActionErrors[id]; statusText.Foreground = RiskHighText; }
+            DockPanel.SetDock(switchButton, Dock.Right);
+            switchButton.Margin = new Thickness(12, 0, 0, 0);
+            footer.Children.Add(switchButton);
             footer.Children.Add(statusText);
-            sp.Children.Add(footer);
-
-            card.Child = sp;
+            Grid cardLayout = new Grid();
+            cardLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            cardLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            cardLayout.Children.Add(sp);
+            Grid.SetRow(footer, 1);
+            cardLayout.Children.Add(footer);
+            card.Child = cardLayout;
 
             // Actualizador en caliente registrado para esta tarjeta (Cero saltos de scroll)
             Action<bool> updateCardUi = (bool applied) =>
             {
-                card.BorderBrush = applied ? AccentBrush : BorderSubtle;
+
                 switchButton.Content = applied ? "Revertir" : "Aplicar";
-                switchButton.Background = applied ? BgSurface : AccentBrush;
-                switchButton.Foreground = applied ? TextPrimary : Brushes.White;
+                switchButton.SetResourceReference(Control.BackgroundProperty, applied ? "MaterialButtonSurface" : "MaterialSilver");
+                switchButton.Foreground = applied ? TextPrimary : BrushHex("#182232");
                 System.Windows.Automation.AutomationProperties.SetName(switchButton, (applied ? "Revertir " : "Aplicar ") + shortTitle);
                 AnimateEntrance(statusText, 2, 180);
                 statusText.Text = applied ? "Detectado como activo" : "No detectado como activo";
@@ -3493,17 +3881,30 @@ namespace Blackwall
             switchButton.Click += async (s, e) =>
             {
                 e.Handled = true;
+                if (!stateKnown || !_pendingTweaks.Add(id)) return;
+                _tweakActionErrors.Remove(id);
                 bool current = _tweakStates.ContainsKey(id) && _tweakStates[id];
                 switchButton.IsEnabled = false;
-                switchButton.Opacity = 0.5;
+                switchButton.Content = current ? "Revirtiendo…" : "Aplicando…";
                 try
                 {
-                    await ExecuteTweakAsync(t, !current);
+                    await _executeTweakAction(t, !current);
+                }
+                catch (Exception ex)
+                {
+                    _tweakActionErrors[id] = ex.Message;
+                    statusText.Text = "No se completó: " + ex.Message;
+                    statusText.Foreground = RiskHighText;
+                    SetStatus("No se completó el ajuste", shortTitle);
+                    AppendLog(ex.Message, "ERROR");
                 }
                 finally
                 {
+                    _pendingTweaks.Remove(id);
                     switchButton.IsEnabled = true;
-                    switchButton.Opacity = 1.0;
+                    switchButton.Content = _tweakStates.ContainsKey(id) && _tweakStates[id] ? "Revertir" : "Aplicar";
+                    Action<bool> currentUpdater;
+                    if (_tweakCardUpdaters.TryGetValue(id, out currentUpdater) && currentUpdater != updateCardUi) RenderCurrentTab();
                 }
             };
 
@@ -3533,11 +3934,12 @@ namespace Blackwall
             Button upgradeAllBtn = CreateStyledButton("Actualizar todo", false);
             upgradeAllBtn.ToolTip = "Actualizar todas las aplicaciones mediante WinGet";
             upgradeAllBtn.Margin = new Thickness(0, 0, 8, 0);
-            upgradeAllBtn.Click += async (s, e) => await UpgradeAllAppsAsync();
+            upgradeAllBtn.Click += async (s, e) => await RunUiActionAsync("software-batch", upgradeAllBtn, () => UpgradeAllAppsAsync());
             topBtns.Children.Add(upgradeAllBtn);
 
             Button installSelectedBtn = CreateStyledButton("Instalar seleccionadas (" + _selectedApps.Count + ")", true);
-            installSelectedBtn.Click += async (s, e) => await InstallSelectedAppsBatchAsync();
+            _installSelectedButton = installSelectedBtn;
+            installSelectedBtn.Click += async (s, e) => await RunUiActionAsync("software-batch", installSelectedBtn, () => InstallSelectedAppsBatchAsync());
             topBtns.Children.Add(installSelectedBtn);
 
             root.Children.Add(CreateBanner(
@@ -3557,13 +3959,13 @@ namespace Blackwall
                 });
             }
             root.Children.Add(catBar);
-
-            UniformGrid grid = new UniformGrid { Columns = 3 };
-            foreach (var a in _apps)
-            {
-                if (_appCategoryScope != "Todas" && GetStr(a, "category") != _appCategoryScope) continue;
-                grid.Children.Add(BuildAppCard(a));
-            }
+            AdaptiveCardGrid grid = new AdaptiveCardGrid { Columns = 3 };
+            var filter = CreateCardFilter(grid, _apps.Where(a => _appCategoryScope == "Todas" || GetStr(a, "category") == _appCategoryScope), BuildAppCard, "name", "description", "wingetId");
+            var empty = CreateBanner("Sin resultados", "Prueba otro nombre o categoría de software.");
+            Action<string> applyFilter = query => empty.Visibility = filter(query) == 0 ? Visibility.Visible : Visibility.Collapsed;
+            root.Children.Add(CreateSectionSearch(_appSearchText, value => { _appSearchText = value; applyFilter(value); }));
+            applyFilter(_appSearchText);
+            root.Children.Add(empty);
             root.Children.Add(grid);
             return root;
         }
@@ -3699,6 +4101,7 @@ namespace Blackwall
             string ver = isInstalled ? GetStr(_installedApps[id], "version") : "";
 
             Border card = CreateCardContainer();
+            card.Tag = id;
             card.Margin = new Thickness(0, 0, 12, 12);
             if (isSelected) card.BorderBrush = AccentBrush;
             else if (isInstalled) card.BorderBrush = RiskLowText;
@@ -3713,11 +4116,15 @@ namespace Blackwall
                 VerticalAlignment = VerticalAlignment.Top,
                 Cursor = Cursors.Hand
             };
+            System.Windows.Automation.AutomationProperties.SetName(chk, "Seleccionar " + GetStr(a, "name"));
             chk.Click += (s, e) =>
             {
                 if (chk.IsChecked == true) _selectedApps.Add(id);
                 else _selectedApps.Remove(id);
-                RenderCurrentTab();
+                if (chk.IsChecked == true) card.BorderBrush = AccentBrush;
+                else if (isInstalled) card.BorderBrush = RiskLowText;
+                else card.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge");
+                if (_installSelectedButton != null) _installSelectedButton.Content = "Instalar seleccionadas (" + _selectedApps.Count + ")";
             };
             DockPanel.SetDock(chk, Dock.Right);
             header.Children.Add(chk);
@@ -3779,7 +4186,9 @@ namespace Blackwall
             }
 
             // Stack de Marca (Icono + Títulos)
-            StackPanel brandStack = new StackPanel { Orientation = Orientation.Horizontal };
+            Grid brandStack = new Grid();
+            brandStack.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            brandStack.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             brandStack.Children.Add(iconContainer);
 
             StackPanel titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -3797,8 +4206,7 @@ namespace Blackwall
                 FontSize = 13.5,
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 1, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 230
+                TextWrapping = TextWrapping.Wrap
             });
             string pub = GetStr(a, "publisher");
             if (!string.IsNullOrEmpty(pub))
@@ -3813,6 +4221,7 @@ namespace Blackwall
             }
 
             brandStack.Children.Add(titleStack);
+            Grid.SetColumn(titleStack, 1);
             header.Children.Add(brandStack);
             sp.Children.Add(header);
 
@@ -3823,14 +4232,19 @@ namespace Blackwall
                 FontSize = 11.5,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 2, 0, 10),
-                Height = 36,
-                TextTrimming = TextTrimming.CharacterEllipsis
+                TextTrimming = TextTrimming.None
             });
 
             DockPanel footer = new DockPanel();
             Button singleBtn = CreateStyledButton(isInstalled ? "Actualizar" : "Instalar", false);
             singleBtn.Padding = new Thickness(9, 4, 9, 4);
-            singleBtn.Click += async (s, e) => await InstallSingleAppAsync(a);
+            singleBtn.Click += async (s, e) =>
+            {
+                if (!singleBtn.IsEnabled) return;
+                singleBtn.IsEnabled = false;
+                try { await InstallSingleAppAsync(a); }
+                finally { singleBtn.IsEnabled = true; }
+            };
             DockPanel.SetDock(singleBtn, Dock.Right);
             footer.Children.Add(singleBtn);
 
@@ -3841,11 +4255,16 @@ namespace Blackwall
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 10.5,
                 VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = GetStr(a, "wingetId"),
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
-            sp.Children.Add(footer);
-
-            card.Child = sp;
+            var cardLayout = new Grid();
+            cardLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            cardLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            cardLayout.Children.Add(sp);
+            Grid.SetRow(footer, 1);
+            cardLayout.Children.Add(footer);
+            card.Child = cardLayout;
             return card;
         }
 
@@ -3854,6 +4273,7 @@ namespace Blackwall
         // --------------------------------------------------------------------
         private UIElement BuildMonitorView()
         {
+            _monitorProcessMemoryLabels.Clear();
             StackPanel root = new StackPanel();
 
             Button refreshBtn = CreateStyledButton("Actualizar procesos", true);
@@ -3880,8 +4300,8 @@ namespace Blackwall
             _liveConsoleTextBox = new TextBox
             {
                 Text = string.Join("\r\n", _consoleLogs),
-                Background = BrushHex("#070A0F"),
-                Foreground = BrushHex("#CBD5E1"),
+                Background = BgApp,
+                Foreground = TextPrimary,
                 BorderBrush = BorderSubtle,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 12,
@@ -3953,13 +4373,15 @@ namespace Blackwall
                     dp.Children.Add(killBtn);
 
                     StackPanel info = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
-                    info.Children.Add(new TextBlock
+                    TextBlock memoryLabel = new TextBlock
                     {
                         Text = "PID " + pid + "  •  " + GetStr(p, "name") + "  •  Parent PID: " + GetStr(p, "parentPid") + "  •  RAM: " + GetStr(p, "memoryMb") + " MB",
                         Foreground = TextPrimary,
                         FontWeight = FontWeights.Bold,
                         FontSize = 12.8
-                    });
+                    };
+                    _monitorProcessMemoryLabels[pid] = memoryLabel;
+                    info.Children.Add(memoryLabel);
                     info.Children.Add(new TextBox
                     {
                         Text = GetStr(p, "commandLine"),
@@ -3994,17 +4416,17 @@ namespace Blackwall
                 "Blackwall utiliza la API WMI nativa root\\default:SystemRestore sin scripts externos."
             ));
 
-            UniformGrid grid = new UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 14) };
+            AdaptiveCardGrid grid = new AdaptiveCardGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 14) };
 
             Border rpCard = CreateCardContainer();
             rpCard.Margin = new Thickness(0, 0, 12, 0);
             StackPanel rpStack = new StackPanel();
-            rpStack.Children.Add(new TextBlock { Text = "🛡️ Protección Automática y Puntos de Restauración", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14 });
+            rpStack.Children.Add(new TextBlock { Text = "🛡️ Protección Automática y Puntos de Restauración", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
             rpStack.Children.Add(new TextBlock { Text = "Crea puntos de restauración nativos en C:\\ o abre el restaurador oficial de Windows (rstrui.exe).", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 10) });
 
             CheckBox autoChk = new CheckBox
             {
-                Content = "Crear Punto de Restauración automáticamente antes de aplicar tweaks",
+                Content = new TextBlock { Text = "Solicitar un punto de restauración antes de aplicar ajustes", TextWrapping = TextWrapping.Wrap },
                 Foreground = TextPrimary,
                 IsChecked = _autoRestorePoint,
                 Margin = new Thickness(0, 0, 0, 12)
@@ -4012,10 +4434,10 @@ namespace Blackwall
             autoChk.Click += (s, e) => _autoRestorePoint = autoChk.IsChecked == true;
             rpStack.Children.Add(autoChk);
 
-            StackPanel rpBtns = new StackPanel { Orientation = Orientation.Horizontal };
+            WrapPanel rpBtns = new WrapPanel();
             Button createRpBtn = CreateStyledButton("➕ Crear Punto de Restauración Ahora", true);
             createRpBtn.Margin = new Thickness(0, 0, 8, 0);
-            createRpBtn.Click += async (s, e) => await CreateRestorePointNowAsync();
+            createRpBtn.Click += async (s, e) => await RunUiActionAsync("restore", createRpBtn, () => CreateRestorePointNowAsync());
             rpBtns.Children.Add(createRpBtn);
 
             Button rstruiBtn = CreateStyledButton("🕰️ Abrir rstrui.exe", false);
@@ -4027,7 +4449,7 @@ namespace Blackwall
 
             Border repairCard = CreateCardContainer();
             StackPanel repStack = new StackPanel();
-            repStack.Children.Add(new TextBlock { Text = "🔧 Reparación de Imagen de Windows (SFC, DISM & Red)", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14 });
+            repStack.Children.Add(new TextBlock { Text = "🔧 Reparación de Imagen de Windows (SFC, DISM & Red)", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
             repStack.Children.Add(new TextBlock { Text = "Invoca directamente las herramientas nativas de mantenimiento de Microsoft.", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 12) });
 
             WrapPanel repBtns = new WrapPanel();
@@ -4137,344 +4559,191 @@ namespace Blackwall
         // ====================================================================
         private string GetConfiguredOtaManifestUrl()
         {
+            return GetStr(_versionInfo, "updateManifestUrl");
+        }
+
+        internal void ReportOtaRollback(string stage)
+        {
+            SetStatus("Actualización no completada; versión anterior conservada.", "Consulta la consola");
+            AppendLog("Se inició la versión anterior. Registro de actualización: " + Path.Combine(stage, "result.txt"), "OTA");
+        }
+
+        private bool IsNewerVersion(string remoteVersion, string localVersion)
+        {
+            return OtaProtocol.ParseVersion(remoteVersion) > OtaProtocol.ParseVersion(localVersion);
+        }
+
+        private async Task<OtaRelease> FetchSignedReleaseAsync(string url, string stage, System.Threading.CancellationToken cancel, bool retain = false)
+        {
+            string manifest = Path.Combine(stage, "update.json");
             try
             {
-                string cfgFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\ota_manifest_url.txt");
-                if (File.Exists(cfgFile))
-                {
-                    string custom = File.ReadAllText(cfgFile, Encoding.UTF8).Trim();
-                    if (!string.IsNullOrEmpty(custom)) return custom;
-                }
+                await OtaDownload.Fetch(url, manifest, 262144, 0, null, cancel);
+                return OtaProtocol.Verify(File.ReadAllBytes(manifest), OtaProtocol.PublicKey());
             }
-            catch { }
-            return _versionInfo != null && _versionInfo.ContainsKey("manifestUrl")
-                ? GetStr(_versionInfo, "manifestUrl")
-                : "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/version.json";
-        }
-
-        private void SaveConfiguredOtaManifestUrl(string url)
-        {
-            try
-            {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Blackwall");
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(Path.Combine(dir, "ota_manifest_url.txt"), url.Trim(), Encoding.UTF8);
-            }
-            catch { }
-        }
-
-        private async Task<Dictionary<string, object>> FetchRemoteManifestAsync(string url)
-        {
-            return await Task.Run(() =>
-            {
-                try
-                {
-                    using (WebClient wc = new WebClient())
-                    {
-                        wc.Encoding = Encoding.UTF8;
-                        wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
-                        wc.Headers.Add("Cache-Control", "no-cache");
-                        string sep = url.Contains("?") ? "&" : "?";
-                        string raw = wc.DownloadString(url + sep + "t=" + DateTime.UtcNow.Ticks);
-                        return _json.Deserialize<Dictionary<string, object>>(raw);
-                    }
-                }
-                catch
-                {
-                    return null;
-                }
-            });
-        }
-
-        private bool IsNewerVersion(string remoteVerStr, string localVerStr)
-        {
-            Version rVer, lVer;
-            if (Version.TryParse(remoteVerStr, out rVer) && Version.TryParse(localVerStr, out lVer))
-                return rVer > lVer;
-            return !string.Equals(remoteVerStr, localVerStr, StringComparison.OrdinalIgnoreCase);
+            finally { if (!retain) { try { if (File.Exists(manifest)) File.Delete(manifest); Directory.Delete(stage); } catch { } } }
         }
 
         private async Task CheckRemoteOtaAsync(bool silentOnUpToDate)
         {
-            string localVer = _versionInfo != null ? GetStr(_versionInfo, "appVersion") : "1.2.0";
-            string manifestUrl = GetConfiguredOtaManifestUrl();
-
-            var remoteManifest = await FetchRemoteManifestAsync(manifestUrl);
-            if (remoteManifest == null || !remoteManifest.ContainsKey("appVersion"))
+            try
             {
-                if (!silentOnUpToDate)
-                    AppendLog("[OTA] No se pudo conectar al manifiesto remoto: " + manifestUrl, "WARN");
-                return;
-            }
-
-            string remoteVer = GetStr(remoteManifest, "appVersion");
-            if (IsNewerVersion(remoteVer, localVer))
-            {
-                _versionInfo = remoteManifest;
-                if (_otaBtn != null)
+                var release = await FetchSignedReleaseAsync(GetConfiguredOtaManifestUrl(), OtaInstaller.NewStage(), System.Threading.CancellationToken.None);
+                if (IsNewerVersion(release.Version, Assembly.GetExecutingAssembly().GetName().Version.ToString(3)))
                 {
-                    _otaBtn.Content = "🔔 Actualizar a v" + remoteVer;
-                    _otaBtn.Background = RiskLowBg;
-                    _otaBtn.Foreground = RiskLowText;
-                    _otaBtn.BorderBrush = RiskLowText;
+                    _availableRelease = release;
+                    _otaBtn.Content = "Actualizar a v" + release.Version;
+                    _otaBtn.ToolTip = "Paquete firmado disponible. Abre Actualizaciones para revisarlo.";
+                    AppendLog("Versión firmada disponible: " + release.Version, "OTA");
+                    AnnounceAvailableUpdate();
                 }
-                AppendLog("[OTA] Nueva versión v" + remoteVer + " detectada en el servidor remoto.", "OTA");
-                SetStatus("🔔 Nueva actualización remota disponible: v" + remoteVer + " (Haz clic en OTA arriba a la derecha)", "OTA Lista");
             }
+            catch (Exception ex) { if (!silentOnUpToDate) AppendLog(ex.Message, "OTA"); }
+        }
+
+        private void AnnounceAvailableUpdate()
+        {
+            if (UpdateOnly || _availableRelease == null || _announcedRelease == _availableRelease.Version || _otaDialog != null || !IsLoaded || !IsVisible || WindowState == WindowState.Minimized) return;
+            _announcedRelease = _availableRelease.Version;
+            ShowOtaUpdateDialog();
         }
 
         private void ShowOtaUpdateDialog()
         {
-            string localVer = "1.2.0";
-            string manifestUrl = GetConfiguredOtaManifestUrl();
-
-            Window dlg = new Window
-            {
-                Title = "Blackwall — Centro de Actualización Remota (OTA) para Todos tus PCs",
-                Width = 640,
-                Height = 520,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                Background = BgSurface,
-                ResizeMode = ResizeMode.NoResize
-            };
-
-            StackPanel root = new StackPanel { Margin = new Thickness(20) };
-            root.Children.Add(new TextBlock
-            {
-                Text = "🔄 Auto-Actualización Remota (Over-The-Air)",
-                Foreground = TextPrimary,
-                FontWeight = FontWeights.Bold,
-                FontSize = 17
-            });
-            root.Children.Add(new TextBlock
-            {
-                Text = "Cuando publiques una nueva versión o catálogo en tu repositorio (GitHub / Servidor), todos los PCs que tengan Blackwall.exe descargarán los cambios y se auto-reemplazarán en caliente.",
-                Foreground = TextSecondary,
-                FontSize = 12.2,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 4, 0, 14)
-            });
-
-            root.Children.Add(new TextBlock
-            {
-                Text = "URL del Manifiesto Remoto (version.json en GitHub Raw o Servidor propio):",
-                Foreground = TextSecondary,
-                FontSize = 11.8,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 4)
-            });
-
-            TextBox urlBox = new TextBox
-            {
-                Text = manifestUrl,
-                Background = BgApp,
-                Foreground = TextPrimary,
-                BorderBrush = BorderSubtle,
-                Padding = new Thickness(8, 6, 8, 6),
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                Margin = new Thickness(0, 0, 0, 12)
-            };
-            root.Children.Add(urlBox);
-
-            TextBox statusBox = new TextBox
-            {
-                Background = BrushHex("#070A0F"),
-                Foreground = BrushHex("#CBD5E1"),
-                BorderBrush = BorderSubtle,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                Height = 210,
-                IsReadOnly = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Padding = new Thickness(10),
-                Margin = new Thickness(0, 0, 0, 14),
-                Text = "Versión local instalada en este PC: v" + localVer + "\r\n" +
-                       "Manifiesto configurado: " + manifestUrl + "\r\n\r\n" +
-                       "Opciones disponibles:\r\n" +
-                       "1. 'Comprobar y Sincronizar Catálogos': Descarga tweaks.json y apps.json remotos al instante sin reiniciar.\r\n" +
-                       "2. 'Auto-Actualizar Ejecutable (.exe)': Descarga el nuevo Blackwall.exe remoto, verifica su firma SHA-256, renombra el ejecutable en uso a Blackwall.exe.old y reinicia automáticamente la nueva versión."
-            };
-            root.Children.Add(statusBox);
-
-            WrapPanel btnPanel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
-
-            Button checkCatalogsBtn = CreateStyledButton("🔄 1. Comprobar y Sincronizar Catálogos", false);
-            checkCatalogsBtn.Margin = new Thickness(0, 0, 8, 0);
-            checkCatalogsBtn.Click += async (s, e) =>
-            {
-                string u = urlBox.Text.Trim();
-                SaveConfiguredOtaManifestUrl(u);
-                statusBox.Text = "Consultando manifiesto remoto:\r\n" + u + " ...";
-                var rem = await FetchRemoteManifestAsync(u);
-                if (rem == null)
-                {
-                    statusBox.Text += "\r\n\r\n[AVISO] No se pudo descargar el manifiesto desde esa URL (verifica que el repositorio en GitHub esté público).";
-                    return;
-                }
-                _versionInfo = rem;
-                string rVer = GetStr(rem, "appVersion");
-                var clList = new List<string>();
-                if (rem.ContainsKey("changelog") && rem["changelog"] is IEnumerable)
-                {
-                    foreach (object item in (IEnumerable)rem["changelog"])
-                        clList.Add("• " + Convert.ToString(item));
-                }
-
-                statusBox.Text = "✅ Conectado al servidor OTA.\r\n" +
-                                 "Versión Local: v" + localVer + "  |  Versión en Servidor: v" + rVer + "\r\n\r\n" +
-                                 "Notas de la versión (Changelog):\r\n" + string.Join("\r\n", clList) + "\r\n\r\n" +
-                                 "Sincronizando catálogos remotos tweaks.json y apps.json...";
-
-                bool catOk = await SyncRemoteCatalogsAsync(rem);
-                if (catOk)
-                {
-                    LoadEmbeddedCatalogs();
-                    RenderCurrentTab();
-                    statusBox.Text += "\r\n✅ Catálogos actualizados en caliente en este PC.";
-                    SetStatus("🟢 Catálogos OTA sincronizados desde el servidor remoto", "OTA OK");
-                }
-            };
-            btnPanel.Children.Add(checkCatalogsBtn);
-
-            Button updateExeBtn = CreateStyledButton("⚡ 2. Auto-Actualizar Ejecutable (.exe) Ahora", true);
-            updateExeBtn.Margin = new Thickness(0, 0, 8, 0);
-            updateExeBtn.Click += async (s, e) =>
-            {
-                string u = urlBox.Text.Trim();
-                SaveConfiguredOtaManifestUrl(u);
-                statusBox.Text = "Verificando manifiesto remoto para reemplazo de binario...";
-                var rem = await FetchRemoteManifestAsync(u);
-                if (rem == null)
-                {
-                    statusBox.Text += "\r\n[ERROR] No se pudo conectar a: " + u;
-                    return;
-                }
-                await PerformBinarySelfUpdateAsync(rem, statusBox);
-            };
-            btnPanel.Children.Add(updateExeBtn);
-
-            Button closeBtn = CreateStyledButton("Cerrar", false);
-            closeBtn.Click += (s, e) => dlg.Close();
-            btnPanel.Children.Add(closeBtn);
-
-            root.Children.Add(btnPanel);
-            dlg.Content = root;
-            dlg.ShowDialog();
+            if (_otaDialog != null) { _otaDialog.Activate(); return; }
+            IInputElement previousFocus = Keyboard.FocusedElement;
+            Window dialog = CreateOtaUpdateDialog();
+            _otaDialog = dialog;
+            _rootBorder.Opacity = 0.55;
+            _rootBorder.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 3 };
+            try { dialog.ShowDialog(); }
+            finally { _otaDialog = null; _rootBorder.Effect = null; _rootBorder.Opacity = 1; if (previousFocus != null) Keyboard.Focus(previousFocus); }
         }
 
-        private async Task<bool> SyncRemoteCatalogsAsync(Dictionary<string, object> remoteManifest)
+        private Window CreateOtaUpdateDialog()
         {
-            return await Task.Run(() =>
+            string installed = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+            var dialog = new Window { Title = "Actualizaciones de Blackwall", Width = Math.Min(510, SystemParameters.WorkArea.Width - 32), Height = Math.Min(740, SystemParameters.WorkArea.Height - 40), WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = BgApp, Foreground = TextPrimary, Icon = Icon };
+            WindowChrome.SetWindowChrome(dialog, new WindowChrome { CaptionHeight = 0, CornerRadius = new CornerRadius(18), GlassFrameThickness = new Thickness(0), ResizeBorderThickness = new Thickness(0) });
+            dialog.Resources = Resources;
+            KeyboardNavigation.SetTabNavigation(dialog, KeyboardNavigationMode.Cycle);
+            var cancel = new System.Threading.CancellationTokenSource();
+            bool busy = false;
+            bool handedOff = false;
+            string activeStage = null;
+            dialog.PreviewKeyDown += (s, e) => { if (e.Key == Key.Escape) { dialog.Close(); e.Handled = true; } };
+            dialog.Closed += (s, e) => { cancel.Cancel(); if (!handedOff && activeStage != null) { try { File.WriteAllText(Path.Combine(activeStage, "cancelled"), "1"); } catch { } } };
+            var body = new StackPanel { Margin = new Thickness(28) };
+            var hero = new StackPanel();
+            var brand = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
+            brand.MouseLeftButtonDown += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) dialog.DragMove(); };
+            var dismiss = CreateStyledButton("×", false); dismiss.MinWidth = 34; dismiss.Padding = new Thickness(8, 0, 8, 0); dismiss.ToolTip = "Posponer actualización";
+            System.Windows.Automation.AutomationProperties.SetName(dismiss, "Posponer actualización");
+            dismiss.Click += (s, e) => dialog.Close(); DockPanel.SetDock(dismiss, Dock.Right); brand.Children.Add(dismiss);
+            brand.Children.Add(new Image { Source = Icon, Width = 38, Height = 38, Margin = new Thickness(0, 0, 12, 0) });
+            brand.Children.Add(new TextBlock { Text = "BLACKWALL  /  EVOLUCIÓN", Foreground = CyberCyanBrush, FontSize = 11, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
+            hero.Children.Add(brand);
+            OtaRelease available = _availableRelease != null && IsNewerVersion(_availableRelease.Version, installed) ? _availableRelease : null;
+            var heading = new TextBlock { Text = available != null ? "Tu próxima versión." : "Siempre al día.", Foreground = TextPrimary, FontSize = 29, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+            hero.Children.Add(heading);
+            var version = new TextBlock { Text = available != null ? "Blackwall " + available.Version : "Versión instalada · " + installed, Foreground = CyberCyanBrush, FontSize = 21, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 12) };
+            hero.Children.Add(version);
+            var heroFrame = new Border { Child = hero, Padding = new Thickness(20), CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 0, 20) };
+            heroFrame.SetResourceReference(Border.BackgroundProperty, "MaterialSurface");
+            heroFrame.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge");
+            body.Children.Add(heroFrame);
+            body.Children.Add(new TextBlock { Text = "Revisa las mejoras y elige cuándo actualizar. El paquete incluye la aplicación y sus catálogos; conservamos un respaldo mientras confirmamos el arranque.", Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20, Margin = new Thickness(0, 0, 0, 16) });
+            string manifestUrl = GetConfiguredOtaManifestUrl();
+            var status = new TextBlock { Text = available != null ? "Nueva versión disponible · firma verificada" : "Comprueba si hay una versión nueva.", Foreground = TextPrimary, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 12, 0, 12) };
+            System.Windows.Automation.AutomationProperties.SetLiveSetting(status, System.Windows.Automation.AutomationLiveSetting.Polite);
+            body.Children.Add(status);
+            var progress = new ProgressBar { Height = 5, Maximum = 100, Foreground = CyberCyanBrush, Background = BgElevated, Visibility = Visibility.Collapsed };
+            body.Children.Add(progress);
+            body.Children.Add(new TextBlock { Text = "QUÉ MEJORA", Foreground = TextSecondary, FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 18, 0, 8) });
+            var notes = new TextBox { Text = available != null ? available.Notes : "Las notas aparecerán después de verificar la actualización.", IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Background = BgSurface, Foreground = TextPrimary, BorderBrush = BorderSubtle, BorderThickness = new Thickness(1), Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 18), MinHeight = 150, MaxHeight = 220, FontSize = 13, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            System.Windows.Automation.AutomationProperties.SetName(notes, "Mejoras de la actualización verificada");
+            body.Children.Add(notes);
+            var actions = new WrapPanel();
+            var check = CreateStyledButton("Buscar actualizaciones", false); check.Margin = new Thickness(0, 0, 0, 12); check.Visibility = available == null ? Visibility.Visible : Visibility.Collapsed;
+            body.Children.Add(check);
+            var install = CreateStyledButton("Actualizar ahora", true); install.IsEnabled = available != null; install.MinWidth = 192; install.Margin = new Thickness(0, 0, 10, 8);
+            var close = CreateStyledButton("Más tarde", false); close.MinWidth = 130;
+            close.Click += (s, e) => dialog.Close();
+            actions.Children.Add(install); actions.Children.Add(close);
+            Func<Task> checkForUpdates = async () =>
             {
+                if (busy) return;
+                busy = true; check.IsEnabled = false; install.IsEnabled = false; available = null;
+                progress.Visibility = Visibility.Visible; progress.IsIndeterminate = MotionAllowed;
+                status.Text = "Comprobando firma y versión…";
                 try
                 {
-                    var cats = GetDict(remoteManifest, "catalogs");
-                    string tweaksUrl = GetStr(cats, "tweaksUrl");
-                    string appsUrl = GetStr(cats, "appsUrl");
-
-                    string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\Catalogs");
-                    if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
-
-                    using (WebClient wc = new WebClient())
-                    {
-                        wc.Encoding = Encoding.UTF8;
-                        wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
-                        if (!string.IsNullOrEmpty(tweaksUrl))
-                        {
-                            string tJson = wc.DownloadString(tweaksUrl + "?t=" + DateTime.UtcNow.Ticks);
-                            if (tJson.Contains("\"tweaks\""))
-                                File.WriteAllText(Path.Combine(cacheDir, "tweaks.json"), tJson, Encoding.UTF8);
-                        }
-                        if (!string.IsNullOrEmpty(appsUrl))
-                        {
-                            string aJson = wc.DownloadString(appsUrl + "?t=" + DateTime.UtcNow.Ticks);
-                            if (aJson.Contains("\"apps\""))
-                                File.WriteAllText(Path.Combine(cacheDir, "apps.json"), aJson, Encoding.UTF8);
-                        }
-                    }
-                    return true;
+                    OtaProtocol.Https(manifestUrl);
+                    available = await FetchSignedReleaseAsync(manifestUrl, OtaInstaller.NewStage(), cancel.Token);
+                    if (UpdateOnly && (available.Version != RequestedUpdateVersion || available.Hash != RequestedUpdateHash)) throw new InvalidDataException("La publicación cambió desde tu confirmación. Cierra este aviso y comprueba de nuevo.");
+                    bool newer = IsNewerVersion(available.Version, installed);
+                    notes.Text = available.Notes;
+                    heading.Text = newer ? "Tu próxima versión." : "Ya estás al día.";
+                    version.Text = newer ? "Blackwall " + available.Version : "Versión instalada · " + installed;
+                    status.Text = newer ? "Versión " + available.Version + " verificada y disponible." : "No hay una versión posterior a la instalada.";
+                    install.IsEnabled = newer;
                 }
-                catch
+                catch (Exception ex) { status.Text = cancel.IsCancellationRequested ? "Comprobación cancelada." : "No se pudo comprobar: " + ex.Message; }
+                finally { busy = false; check.IsEnabled = true; progress.Visibility = Visibility.Collapsed; }
+            };
+            check.Click += async (s, e) => await checkForUpdates();
+            Func<Task> installUpdate = async () =>
+            {
+                if (busy || available == null) return;
+                busy = true; install.IsEnabled = false; check.IsEnabled = false;
+                progress.Visibility = Visibility.Visible; progress.IsIndeterminate = MotionAllowed;
+                status.Text = "Volviendo a verificar el paquete…";
+                try
                 {
-                    return false;
+                    if (OtaProtocol.Elevated())
+                    {
+                        Program.LaunchUnelevated(Process.GetCurrentProcess().MainModule.FileName, "--ota-update " + OtaInstaller.Quote(available.Version) + " " + OtaInstaller.Quote(available.Hash));
+                        handedOff = true;
+                        Application.Current.Shutdown();
+                        return;
+                    }
+                    string stage = OtaInstaller.NewStage();
+                    activeStage = stage;
+                    var release = await FetchSignedReleaseAsync(manifestUrl, stage, cancel.Token, true);
+                    if (release.Version != available.Version || release.Hash != available.Hash || release.Size != available.Size || !IsNewerVersion(release.Version, installed)) throw new InvalidDataException("La versión publicada cambió; vuelve a comprobarla.");
+                    progress.IsIndeterminate = false;
+                    await OtaDownload.Fetch(release.Url, Path.Combine(stage, "Blackwall.exe"), 104857600, release.Size, (bytes, total) => Dispatcher.BeginInvoke(new Action(() => { progress.Value = bytes * 100.0 / total; status.Text = "Descargando " + bytes + " de " + total + " bytes"; })), cancel.Token);
+                    OtaProtocol.VerifyBinary(Path.Combine(stage, "Blackwall.exe"), release);
+                    status.Text = "Paquete verificado. Preparando reinicio…";
+                    cancel.Token.ThrowIfCancellationRequested();
+                    await OtaInstaller.Start(stage);
+                    cancel.Token.ThrowIfCancellationRequested();
+                    handedOff = true;
+                    Application.Current.Shutdown();
                 }
-            });
+                catch (Exception ex) { status.Text = cancel.IsCancellationRequested ? "Descarga cancelada. La aplicación no se modificó." : "No se pudo actualizar: " + ex.Message; }
+                finally { busy = false; check.IsEnabled = true; install.IsEnabled = available != null && IsNewerVersion(available.Version, installed); progress.Visibility = Visibility.Collapsed; }
+            };
+            install.Click += async (s, e) => await installUpdate();
+            dialog.Loaded += async (s, e) =>
+            {
+                AnimateEntrance(body, 4, 180);
+                if (UpdateOnly)
+                {
+                    await checkForUpdates();
+                    if (dialog.IsVisible && !cancel.IsCancellationRequested && install.IsEnabled) await installUpdate();
+                }
+                else if (install.IsEnabled) install.Focus(); else check.Focus();
+            };
+            var layout = new Grid(); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.Children.Add(new SmoothScrollViewer { ReduceMotion = !MotionAllowed, Background = BgApp, Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+            var footer = new Border { Background = BgSidebar, BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(28, 18, 28, 14), Child = actions };
+            Grid.SetRow(footer, 1); layout.Children.Add(footer);
+            var frame = new Border { Background = BgApp, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(18), Child = layout };
+            frame.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge"); dialog.Content = frame;
+            return dialog;
         }
 
-        private async Task PerformBinarySelfUpdateAsync(Dictionary<string, object> remoteManifest, TextBox logBox)
-        {
-            var binInfo = GetDict(remoteManifest, "binary");
-            string downloadUrl = GetStr(binInfo, "downloadUrl");
-            string expectedSha = GetStr(binInfo, "sha256").Trim();
-
-            if (string.IsNullOrEmpty(downloadUrl))
-            {
-                logBox.Text += "\r\n[ERROR] El manifiesto remoto no contiene binary.downloadUrl.";
-                return;
-            }
-
-            string currentExe = Process.GetCurrentProcess().MainModule.FileName;
-            string tempUpdateFile = currentExe + ".update";
-            string oldBackupFile = currentExe + ".old";
-
-            try
-            {
-                if (File.Exists(tempUpdateFile)) File.Delete(tempUpdateFile);
-                logBox.Text += "\r\nDescargando nuevo ejecutable desde:\r\n" + downloadUrl + " ...";
-
-                using (WebClient wc = new WebClient())
-                {
-                    wc.Headers.Add("User-Agent", "Blackwall-OTA/1.2");
-                    wc.DownloadProgressChanged += (s, ev) =>
-                    {
-                        SetStatus("⬇️ Descargando actualización OTA: " + ev.ProgressPercentage + "%", "OTA");
-                    };
-                    await wc.DownloadFileTaskAsync(new Uri(downloadUrl), tempUpdateFile);
-                }
-
-                // Verificar cabecera ejecutable PE ("MZ") y tamaño mínimo
-                byte[] fileBytes = File.ReadAllBytes(tempUpdateFile);
-                if (fileBytes.Length < 40960 || fileBytes[0] != 0x4D || fileBytes[1] != 0x5A)
-                {
-                    File.Delete(tempUpdateFile);
-                    logBox.Text += "\r\n[ERROR] El archivo descargado no es un ejecutable válido de Windows.";
-                    return;
-                }
-
-                // Verificar Hash SHA-256 si fue especificado en version.json
-                if (!string.IsNullOrEmpty(expectedSha))
-                {
-                    using (SHA256 sha = SHA256.Create())
-                    {
-                        byte[] hashBytes = sha.ComputeHash(fileBytes);
-                        string actualHex = BitConverter.ToString(hashBytes).Replace("-", "");
-                        if (!string.Equals(actualHex, expectedSha, StringComparison.OrdinalIgnoreCase))
-                        {
-                            File.Delete(tempUpdateFile);
-                            logBox.Text += "\r\n[ERROR SEGURIDAD] El hash SHA-256 del ejecutable descargado no coincide con el manifiesto.";
-                            return;
-                        }
-                    }
-                }
-
-                // Reemplazo en caliente Zero-Lock en NTFS (Renombrar .exe activo -> .exe.old)
-                if (File.Exists(oldBackupFile)) File.Delete(oldBackupFile);
-                File.Move(currentExe, oldBackupFile);
-                File.Move(tempUpdateFile, currentExe);
-
-                logBox.Text += "\r\n✅ Ejecutable actualizado correctamente. Reiniciando Blackwall...";
-                Process.Start(currentExe);
-                Application.Current.Shutdown();
-            }
-            catch (Exception ex)
-            {
-                try { if (File.Exists(tempUpdateFile)) File.Delete(tempUpdateFile); } catch { }
-                logBox.Text += "\r\n[ERROR] No se pudo completar el auto-reemplazo: " + ex.Message;
-            }
-        }
 
         private void ExportReport(string format)
         {
@@ -4499,50 +4768,34 @@ namespace Blackwall
         // ====================================================================
         private Border CreateBanner(string title, string subtitle, UIElement rightAction = null)
         {
-            Border b = new Border
-            {
-                Background = BgSurface,
-                BorderBrush = CyberCyanBrush,
-                BorderThickness = new Thickness(3, 0, 0, 0),
-                CornerRadius = new CornerRadius(0, 0, 16, 0),
-                Padding = new Thickness(22, 20, 20, 20),
-                Margin = new Thickness(0, 0, 0, 24)
-            };
-            DockPanel dp = new DockPanel();
+            Border banner = CreateCardContainer();
+            banner.Padding = new Thickness(22);
+            banner.Margin = new Thickness(0, 0, 0, 20);
+            var body = new StackPanel();
+            body.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.SemiBold, FontSize = 24, TextWrapping = TextWrapping.Wrap });
+            body.Children.Add(new TextBlock { Text = subtitle, Foreground = TextSecondary, FontSize = 13, LineHeight = 20, Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap });
             if (rightAction != null)
             {
-                FrameworkElement actionElement = rightAction as FrameworkElement;
-                if (actionElement != null) actionElement.VerticalAlignment = VerticalAlignment.Center;
-                DockPanel.SetDock(rightAction, Dock.Right);
-                dp.Children.Add(rightAction);
+                var actions = rightAction as FrameworkElement;
+                if (actions != null) { actions.Margin = new Thickness(0, 16, 0, 0); actions.HorizontalAlignment = HorizontalAlignment.Left; }
+                body.Children.Add(rightAction);
             }
-            StackPanel sp = new StackPanel { Margin = new Thickness(0, 0, rightAction == null ? 0 : 18, 0) };
-            sp.Children.Add(new TextBlock { Text = title, Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 22, TextWrapping = TextWrapping.Wrap });
-            sp.Children.Add(new TextBlock { Text = subtitle, Foreground = TextSecondary, FontSize = 12, LineHeight = 19, Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap });
-            dp.Children.Add(sp);
-            b.Child = dp;
-            return b;
+            banner.Child = body;
+            return banner;
         }
 
         private Border CreateCardContainer()
         {
-            Border card = new Border
+            Border card = new MaterialCard
             {
+                Animate = () => MotionAllowed,
                 Uid = "motion-card",
-                Background = BgSurface,
-                BorderBrush = BorderSubtle,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0, 0, 12, 0),
+                CornerRadius = new CornerRadius(16),
                 Padding = new Thickness(18)
             };
-            card.MouseEnter += (s, e) =>
-            {
-                if (!MotionAllowed) return;
-                var glow = new System.Windows.Media.Effects.DropShadowEffect { Color = ColorHex("#EF4055"), ShadowDepth = 0, BlurRadius = 22, Opacity = 0 };
-                card.Effect = glow;
-                glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.OpacityProperty, new DoubleAnimation(0, 0.38, TimeSpan.FromMilliseconds(220)));
-            };
-            card.MouseLeave += (s, e) => card.Effect = null;
+            card.SetResourceReference(Border.BackgroundProperty, "MaterialSurface");
+            card.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge");
             return card;
         }
 
@@ -4603,7 +4856,7 @@ namespace Blackwall
             return new Border
             {
                 Background = bg,
-                CornerRadius = new CornerRadius(0, 0, 5, 0),
+                CornerRadius = new CornerRadius(6),
                 BorderBrush = fg,
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 Padding = new Thickness(8, 4, 8, 4),
@@ -4619,15 +4872,15 @@ namespace Blackwall
             Button btn = new Button
             {
                 Content = text,
-                Background = primary ? AccentBrush : BgSurface,
-                Foreground = primary ? Brushes.White : TextPrimary,
-                BorderBrush = primary ? AccentBrush : BorderSubtle,
+                Foreground = primary ? BrushHex("#182232") : TextPrimary,
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(14, 8, 14, 8),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Cursor = Cursors.Hand
             };
+            btn.SetResourceReference(Control.BackgroundProperty, primary ? "MaterialSilver" : "MaterialButtonSurface");
+            btn.SetResourceReference(Control.BorderBrushProperty, "MaterialEdge");
 
             var pressScale = new ScaleTransform(1, 1);
             btn.RenderTransformOrigin = new Point(0.5, 0.5);
@@ -4638,24 +4891,18 @@ namespace Blackwall
                 pressScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, 0.97, TimeSpan.FromMilliseconds(90)) { AutoReverse = true, FillBehavior = FillBehavior.Stop });
                 pressScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, 0.97, TimeSpan.FromMilliseconds(90)) { AutoReverse = true, FillBehavior = FillBehavior.Stop });
             };
-            btn.MouseEnter += (s, e) =>
-            {
-                if (MotionAllowed) btn.BeginAnimation(OpacityProperty, new DoubleAnimation(0.82, 1, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.Stop });
-                if (!primary)
-                {
-                    btn.Background = BgElevated;
-                    btn.BorderBrush = AccentBrush;
-                }
-            };
-            btn.MouseLeave += (s, e) =>
-            {
-                if (!primary)
-                {
-                    btn.Background = BgSurface;
-                    btn.BorderBrush = BorderSubtle;
-                }
-            };
             return btn;
+        }
+
+        private async Task RunUiActionAsync(string key, Button button, Func<Task> action)
+        {
+            if (!_uiActions.Add(key)) return;
+            button.IsEnabled = false;
+            object label = button.Content;
+            button.Content = "En curso…";
+            try { await action(); }
+            catch (Exception ex) { SetStatus("No se completó: " + ex.Message, "Consulta la consola"); AppendLog(ex.Message, "ERROR"); }
+            finally { _uiActions.Remove(key); button.IsEnabled = true; button.Content = label; }
         }
 
         private void AddFilterButton(Panel parent, string text, bool active, Action onClick)
@@ -4670,10 +4917,11 @@ namespace Blackwall
         {
             Dispatcher.Invoke(() =>
             {
-                _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [" + tag + "] " + msg);
+                string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] [" + tag + "] " + msg;
+                _consoleLogs.Add(line);
                 if (_liveConsoleTextBox != null)
                 {
-                    _liveConsoleTextBox.Text = string.Join("\r\n", _consoleLogs);
+                    _liveConsoleTextBox.AppendText((_liveConsoleTextBox.Text.Length == 0 ? "" : "\r\n") + line);
                     _liveConsoleTextBox.ScrollToEnd();
                 }
             });

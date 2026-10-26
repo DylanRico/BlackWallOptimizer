@@ -1,5 +1,7 @@
 # Blackwall: revisión de seguridad de publicación y estado OTA
 
+> Auditoría histórica anterior a la implementación de OTA firmada WPF. La ruta nativa, el versionado y el publicador cambiaron después de este informe; consulta `OTA-ACTUALIZACIONES.md` para el estado vigente, las pruebas y los límites. Los hallazgos de Rust/Tauri y del bridge alternativo no se han corregido en esa implementación WPF.
+
 Fecha de revisión: 24 de octubre de 2026. Alcance: árbol de trabajo, cambios salientes de Git, ejecutable WPF y rutas OTA de WPF, Tauri y bridge de desarrollo. No se ejecutó una actualización sobre una instalación real.
 
 ## Respuesta: ¿ya sirve el versionamiento por OTA?

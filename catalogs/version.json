@@ -1,25 +1,14 @@
 {
-    "appVersion": "1.3.0",
-    "releaseDate": "2026-10-24T05:00:00Z",
-    "manifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/version.json",
-    "mandatory": false,
-    "binary": {
-        "downloadUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/Blackwall.exe",
-        "sha256": "f541fe2eb25e90ad9023cd9c24e9c052875950f7bbde76a6a46a0a6021c6b447"
-    },
-    "catalogs": {
-        "tweaksVersion": "2.2.0",
-        "tweaksUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/tweaks.json",
-        "appsVersion": "2.1.0",
-        "appsUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/apps.json"
-    },
-    "changelog": [
-        "BLACKWALL ICE PROTOCOL v1.3.0 // Rediseño Cyberpunk 2077 Muro Negro Completo.",
-        "Ventana borderless nativa con WindowChrome y barra de título integrada con controles animados (Minimizar, Restaurar, Cerrar).",
-        "Apertura maximizada por defecto con auto-ajuste de márgenes y soporte multimonitor.",
-        "Paleta Cyberpunk Muro Negro (#07070A, Carmesí #FF1F4B, Cyan #00E5FF, Amarillo #FCEE0A) y Modo Arasaka Light con transición reactiva sin parpadeo.",
-        "Tarjetas de tweaks con títulos concisos (shortTitle), resúmenes directos de 1 línea y cajón desplegable técnico para descripción completa y beneficios medibles.",
-        "Switch Toggle animado en cada tarjeta con actualización reactiva en caliente (sin salto de scroll).",
-        "Agrupación clara por subcategorías con contadores y separación vertical de 34px en contenedor centrado (MaxWidth 1360)."
-    ]
+  "appVersion": "1.4.4",
+  "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
+  "changelog": [
+    "Filtros de sección instantáneos sin reconstruir el buscador ni las tarjetas.",
+    "Selección de aplicaciones y consola con actualizaciones parciales.",
+    "Recursos de reflejos y trazos reutilizados conservando el diseño grafito y plata.",
+    "Desplazamiento continuo sincronizado con el render, sin cambios bruscos entre gestos.",
+    "Modo claro de plata mate con superficies menos luminosas y texto contrastado.",
+    "Aviso vertical de actualizaciones firmadas con mejoras, actualización voluntaria y posposición.",
+    "Solicitud UAC al abrir y traspaso del actualizador al usuario normal de Windows.",
+    "Canal de actualización integrado: sin campo editable ni sustitución mediante configuración local."
+  ]
 }
