@@ -1,15 +1,15 @@
 # Blackwall: actualizaciones WPF firmadas
 
-Implementación local del 25 de octubre de 2026, publicada el 26 de octubre de 2026. Sustituye el flujo WPF experimental descrito en `SEGURIDAD-Y-ESTADO-OTA.md`. La release `v1.4.1` y el manifiesto firmado están publicados; se verificó su descarga desde GitHub con el cliente OTA real. Rust/Tauri y el bridge de desarrollo conservan sus implementaciones anteriores y no están cubiertos por este protocolo.
+La ruta WPF utiliza un manifiesto y un ejecutable verificados. Sustituye el flujo WPF experimental descrito en `SEGURIDAD-Y-ESTADO-OTA.md`. Rust/Tauri y el bridge de desarrollo conservan implementaciones anteriores que no están cubiertas por este protocolo.
 
-**Entrega vigente: [Blackwall 1.4.4](https://github.com/DylanRico/BlackWallOptimizer/releases/tag/v1.4.4).** Fuentes sincronizadas, assets firmados publicados y manifiesto predeterminado actualizado después del binario. El cliente nativo 1.4.3 detectó y descargó 1.4.4 desde GitHub, verificando firma, versión, tamaño y hash. La instalación/reapertura interactiva queda para la prueba manual del propietario con la copia anterior conservada en el escritorio. Detalles en [ENTREGA-FLUIDEZ-1.4.4.md](ENTREGA-FLUIDEZ-1.4.4.md); las referencias 1.4.0/1.4.1 de esta guía describen la entrega inicial.
+**Versión publicada durante esta revisión: [Blackwall 1.4.6](https://github.com/DylanRico/BlackWallOptimizer/releases/tag/v1.4.6).** El cliente 1.4.5 detectó y descargó esa versión, verificando firma, notas, tamaño, versión y hash; la instalación interactiva completa quedó pendiente de prueba manual. Consulta [Releases](https://github.com/DylanRico/BlackWallOptimizer/releases) para comprobar la versión pública actual. Los ejemplos 1.4.0/1.4.1 de las secciones históricas no son instrucciones para republicar esas versiones.
 
 ## Versiones y compilación
 
-- `catalogs/version.json` es metadato de compilación: versión predeterminada local `1.4.4`, dirección del índice firmado y notas. Ya no contiene el hash de su propio ejecutable. La URL se integra en el ejecutable: no existe campo editable ni se lee una URL sustitutiva desde AppData. Cambiar el metadato local no publica ni instala una OTA.
+- `catalogs/version.json` es metadato de compilación: versión local, dirección del índice firmado y notas. La versión local puede diferir de la pública mientras hay cambios en desarrollo. La URL se integra en el ejecutable: no existe campo editable ni se lee una URL sustitutiva desde AppData. Cambiar el metadato local no publica ni instala una OTA.
 - `scripts/Build-Native.ps1` genera los atributos de versión del ensamblado y el recurso `version.json` desde el mismo valor. No hay una segunda versión fija en C#.
 - `Prepare-Release.ps1 -Version X.Y.Z` exige que `catalogs/version.json` declare esa misma versión y tenga notas, porque el changelog firmado sale de ahí. Compila y verifica en staging **antes** de descifrar la clave privada; si algo falla, borra su staging y no deja paquete a medias. No reemplaza el portable raíz.
-- El paquete preparado es `artifacts/releases/1.4.1/Blackwall.exe` junto con `update.json`. El ejecutable inicial con el verificador y la clave pública se compila como `Blackwall.exe` raíz, versión `1.4.0`.
+- Cada paquete preparado contiene `artifacts/releases/<version>/Blackwall.exe` junto con `update.json`. La compilación portable local se genera como `Blackwall.exe` en la raíz.
 - Cada carpeta de versión preparada es inmutable para el publicador: si existe, el script falla en lugar de sobrescribirla. Los borradores anteriores conservados en otras carpetas de `artifacts` no son entregas publicadas.
 
 Para compilar el portable actual:
@@ -21,7 +21,8 @@ Para compilar el portable actual:
 Para preparar otra versión, después de cambiar y comprobar el código:
 
 ```powershell
-powershell -NoProfile -File .\scripts\Prepare-Release.ps1 -Version 1.4.2
+$version = (Get-Content -Raw -Encoding UTF8 .\catalogs\version.json | ConvertFrom-Json).appVersion
+powershell -NoProfile -File .\scripts\Prepare-Release.ps1 -Version $version
 ```
 
 `Publish-Release.bat` solicita la versión y llama a ese preparador. La entrada se pasa por una variable de entorno, sin insertarla en código de shell. No sube archivos, crea certificados Authenticode, cambia el almacén de confianza, mata instancias ni recompila después de calcular el hash firmado.
@@ -30,7 +31,7 @@ powershell -NoProfile -File .\scripts\Prepare-Release.ps1 -Version 1.4.2
 
 El paquete usa RSA de 3072 bits, PKCS#1 v1.5 y SHA-256. El cliente verifica con `assets/update-public-key.xml`, embebido como recurso del ejecutable. La clave privada se creó en `%LOCALAPPDATA%\BlackwallPublisher\update-signing.dpapi`, fuera del proyecto, protegida con DPAPI para el usuario actual y permisos de archivo para ese usuario y SYSTEM. No se ha mostrado ni subido su contenido.
 
-`Initialize-UpdateKey.ps1` conserva una identidad existente y falla si falta uno de sus dos archivos; no genera otra clave silenciosamente. El preparador comprueba que la clave privada corresponde a la pública antes de construir o firmar.
+`Initialize-UpdateKey.ps1` conserva una identidad existente y falla si falta uno de sus dos archivos; no genera otra clave silenciosamente. El preparador comprueba que la clave privada corresponde a la pública antes de firmar.
 
 **Antes de distribuir clientes, respalda la clave.** DPAPI depende del perfil de Windows. La pérdida del perfil sin un respaldo recuperable impediría firmar actualizaciones que acepten los clientes existentes.
 
@@ -87,7 +88,7 @@ No se elevan permisos para instalar una actualización. Desde la candidata 1.4.3
 
 El instalador solo puede cerrar el proceso candidato que acaba de lanzar cuando este no confirma salud ni responde al cierre. Las pruebas de procesos se hicieron sobre ejecutables desechables, sin actualizar una instalación real ni terminar aplicaciones del usuario.
 
-## Publicación y comprobación real
+## Publicación y comprobación real: ejemplo histórico 1.4.1
 
 Secuencia de publicación (binario y manifiesto completados el 26 de octubre de 2026):
 
@@ -114,7 +115,7 @@ La recuperación automática cubre los fallos gestionados de reemplazo y de arra
 
 ```powershell
 powershell -NoProfile -File .\scripts\Test-Ui.ps1
-powershell -NoProfile -File .\scripts\Test-Ota.ps1 -PackagePath .\artifacts\releases\1.4.1
+powershell -NoProfile -File .\scripts\Test-Ota.ps1 -PackagePath .\artifacts\releases\1.4.6
 powershell -NoProfile -File .\tests\Test-UpdateKey.ps1
 node .\scripts\Test-OtaNetwork.mjs
 node .\scripts\check-publish-safety.mjs --self-test
@@ -125,4 +126,4 @@ El último check de red requiere Postman CLI y OpenSSL de Git for Windows. Ejecu
 
 La evidencia queda en `artifacts/ota-*-checks.log`, `artifacts/ota-network/`, `artifacts/github-live-check/` y las carpetas de copias de prueba. Se mantiene excluida de Git. La interfaz visible, la instalación completa contra GitHub, otros equipos y una interrupción física de energía siguen sin verificar.
 
-Resultado local: 106 comprobaciones WPF y 26 capturas fuera de pantalla, 16 pruebas web, 12 casos del compilador, 44 casos OTA de protocolo/transacción/subprocesos, 11 casos HTTPS/Postman y 5 casos de respaldo/restauración con identidad desechable. El escáner revisó 91 archivos/versiones publicables sin hallazgos; no constituye una garantía de ausencia de secretos. El portable raíz se recompiló y verificó como `1.4.0.0`; el paquete preparado conserva `1.4.1.0`. Las capturas fuera de pantalla no sustituyen la validación de una ventana visible en otro Windows.
+Los resultados de comprobaciones anteriores son evidencia histórica, no una garantía sobre el estado actual. Las capturas fuera de pantalla no sustituyen la validación de una ventana visible en otro Windows.
