@@ -1,10 +1,14 @@
 {
-  "appVersion": "1.4.5",
+  "appVersion": "1.4.6",
   "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
   "changelog": [
-    "Aviso de actualización más fluido: el fondo se atenúa sin desenfocar toda la ventana.",
-    "Contorno de foco redondeado y visible al navegar con el teclado.",
-    "Ventana adaptada a pantallas pequeñas y a escalados altos de Windows.",
-    "Compilación y empaquetado con comprobaciones previas y mensajes de error más claros."
+    "Navegación y tarjetas reorganizadas, con incorporación progresiva del contenido al cambiar de sección.",
+    "Registro de actividad con filtros, estados de operación y actualizaciones agrupadas de las entradas.",
+    "Optimizaciones con descripciones y advertencias revisadas; catálogo depurado de 45 a 43 ajustes.",
+    "Corrección de valores REG_DWORD de 32 bits y comprobación de todos los criterios verificables de cada ajuste.",
+    "Los fallos de aplicación se muestran por ajuste y en los lotes, sin presentar una ejecución parcial como completada.",
+    "Herramientas de mantenimiento: códigos de error y tiempos de espera ya no se presentan como éxito.",
+    "Se conserva el diseño grafito y plata, el modo claro mate, el desplazamiento suave y el aviso vertical de actualización.",
+    "Paquete OTA firmado con estas mismas novedades para mostrarlas antes de actualizar."
   ]
 }

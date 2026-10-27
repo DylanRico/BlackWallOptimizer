@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.2.0",
-  "lastUpdated": "2026-10-23T23:15:00Z",
+  "lastUpdated": "2026-10-27T12:00:00Z",
   "tweaks": [
     {
       "id": "laptop_modern_standby_network",
@@ -143,11 +143,11 @@
       "category": "optimization",
       "subcategory": "Energía y Batería (Laptop)",
       "pack": "adaptive_power",
-      "title": "Hibernación Compacta (Hiberfil Reducido al 40%)",
-      "description": "Mantiene activa la hibernación para proteger tus documentos si se agota la batería, pero comprime el archivo hiberfil.sys al 40% de la RAM.",
+      "title": "Hibernación compacta (hiberfil.sys al 40 %)",
+      "description": "Mantiene la hibernación activa y fija hiberfil.sys al 40 % de la RAM. Windows ya usa ese tamaño por defecto: solo libera espacio si el archivo se había ampliado (por ejemplo, al 100 %).",
       "benefits": [
-        "Recupera entre 6 GB y 16 GB de espacio en el SSD NVMe",
-        "Conserva la hibernación segura ante batería crítica"
+        "Libera espacio si hiberfil.sys estaba por encima del 40 % de la RAM",
+        "Conserva la hibernación ante batería crítica"
       ],
       "riskLevel": "low",
       "riskWarning": null,
@@ -185,11 +185,11 @@
       "undoOps": [
         {
           "type": "powercfg",
-          "args": "/hibernate /size 100"
+          "args": "/hibernate /size 40"
         }
       ],
       "shortTitle": "Hibernación compacta",
-      "summary": "Reduce el archivo hiberfil.sys al 40% liberando entre 6 GB y 16 GB de almacenamiento.",
+      "summary": "Devuelve hiberfil.sys al 40 % de la RAM, el tamaño por defecto de Windows.",
       "affects": null
     },
     {
@@ -197,11 +197,11 @@
       "category": "optimization",
       "subcategory": "Máxima Potencia (Desktop)",
       "pack": "adaptive_power",
-      "title": "Activar Plan de Energía Ultimate / Alto Rendimiento Sin Latencia",
-      "description": "Desbloquea y activa el esquema de energía de Máximo Rendimiento que evita el aparcamiento agresivo de núcleos (Core Parking) y mantiene frecuencias estables.",
+      "title": "Activar el plan de energía Máximo rendimiento",
+      "description": "Duplica el plan oculto Máximo rendimiento (Ultimate Performance) de Windows y lo activa. Revertir vuelve al plan Equilibrado y elimina la copia. En algunos equipos con Modern Standby Windows no ofrece este plan; en ese caso la app mostrará el error.",
       "benefits": [
-        "Elimina la latencia de escalado de frecuencias del procesador",
-        "Máxima estabilidad de fotogramas (frametimes) y respuesta inmediata"
+        "Mantiene las frecuencias del procesador sin aparcar núcleos",
+        "Respuesta más constante en juegos y cargas intensivas"
       ],
       "riskLevel": "low",
       "riskWarning": null,
@@ -222,35 +222,28 @@
       ],
       "applyOps": [
         {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
-          "name": "CsEnabled",
-          "value": 0
+          "type": "powercfg",
+          "args": "/duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 b1ac0a11-5e7f-4d2a-9c3e-0000000001a5",
+          "allowFailure": true
         },
         {
           "type": "powercfg",
-          "args": "/duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61"
-        },
-        {
-          "type": "powercfg",
-          "args": "/setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+          "args": "/setactive b1ac0a11-5e7f-4d2a-9c3e-0000000001a5"
         }
       ],
       "undoOps": [
         {
-          "type": "reg_delete",
-          "hive": "HKLM",
-          "key": "SYSTEM\\CurrentControlSet\\Control\\Power",
-          "name": "CsEnabled"
+          "type": "powercfg",
+          "args": "/setactive 381b4222-f694-41f0-9685-ff5bb260df2e"
         },
         {
           "type": "powercfg",
-          "args": "/setactive 381b4222-f694-41f0-9685-ff5bb260df2e"
+          "args": "/delete b1ac0a11-5e7f-4d2a-9c3e-0000000001a5",
+          "allowFailure": true
         }
       ],
       "shortTitle": "Plan Máximo Rendimiento",
-      "summary": "Desbloquea el plan Ultimate Performance evitando aparcamiento de núcleos y latencia.",
+      "summary": "Crea y activa el plan Máximo rendimiento de Windows, que evita el aparcamiento de núcleos.",
       "affects": null
     },
     {
@@ -531,7 +524,7 @@
           "hive": "HKLM",
           "key": "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games",
           "name": "GPU Priority",
-          "value": 2
+          "value": 8
         },
         {
           "type": "reg_dword",
@@ -614,18 +607,22 @@
       ],
       "undoOps": [
         {
-          "type": "reg_dword",
+          "type": "reg_delete",
           "hive": "HKCU",
           "key": "Software\\Microsoft\\GameBar",
-          "name": "AutoGameModeEnabled",
-          "value": 0
+          "name": "AutoGameModeEnabled"
         },
         {
-          "type": "reg_dword",
+          "type": "reg_delete",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\GameBar",
+          "name": "AllowAutoGameMode"
+        },
+        {
+          "type": "reg_delete",
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
-          "name": "HwSchMode",
-          "value": 1
+          "name": "HwSchMode"
         }
       ],
       "shortTitle": "Modo Juego y HAGS GPU",
@@ -637,11 +634,10 @@
       "category": "optimization",
       "subcategory": "Gaming y Baja Latencia (Ceito)",
       "pack": "ceito_gaming",
-      "title": "Optimizar Pantalla Completa Exclusiva y Desactivar GameBar Presence Writer",
-      "description": "Configura el comportamiento de pantalla completa para minimizar la latencia del compositor DWM y desactiva el monitoreo de presencia de Xbox al iniciar juegos.",
+      "title": "Optimizar el comportamiento de pantalla completa",
+      "description": "Configura GameConfigStore para que los juegos en pantalla completa usen el modo exclusivo en vez de las optimizaciones de pantalla completa de Windows. El efecto depende del juego.",
       "benefits": [
-        "Menor Input Lag en modo pantalla completa",
-        "Evita que GameBarPresenceWriter.exe se ejecute en cada juego"
+        "Puede reducir el retraso de entrada en juegos con pantalla completa exclusiva"
       ],
       "riskLevel": "low",
       "riskWarning": null,
@@ -682,13 +678,6 @@
           "key": "System\\GameConfigStore",
           "name": "GameDVR_DXGIHonorFSEWindowsCompatible",
           "value": 1
-        },
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\Windows.Gaming.GameBar.PresenceServer.Internal.PresenceWriter",
-          "name": "ActivationType",
-          "value": 0
         }
       ],
       "undoOps": [
@@ -712,17 +701,10 @@
           "key": "System\\GameConfigStore",
           "name": "GameDVR_DXGIHonorFSEWindowsCompatible",
           "value": 0
-        },
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\Windows.Gaming.GameBar.PresenceServer.Internal.PresenceWriter",
-          "name": "ActivationType",
-          "value": 1
         }
       ],
       "shortTitle": "Pantalla completa optimizada",
-      "summary": "Reduce el retraso de DWM y bloquea la inyección de GameBarPresenceWriter en juegos.",
+      "summary": "Fuerza la pantalla completa exclusiva en lugar de la optimizada por el compositor.",
       "affects": null
     },
     {
@@ -1099,14 +1081,14 @@
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
           "name": "NtfsDisableLastAccessUpdate",
-          "value": 2147483648
+          "value": 2147483650
         },
         {
           "type": "reg_dword",
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
           "name": "NtfsDisable8dot3NameCreation",
-          "value": 0
+          "value": 2
         }
       ],
       "shortTitle": "Lectura rápida en SSD NTFS",
@@ -1330,6 +1312,12 @@
           "type": "reg_delete",
           "hive": "HKLM",
           "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+          "name": "AllowTelemetry"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\DataCollection",
           "name": "AllowTelemetry"
         },
         {
@@ -1727,56 +1715,6 @@
       "affects": null
     },
     {
-      "id": "debloat_wifi_sense",
-      "category": "debloat",
-      "subcategory": "Privacidad y Telemetría (Titus)",
-      "pack": "titus_essential",
-      "title": "Desactivar Wi-Fi Sense y Conexión Automática a Hotspots Abiertos",
-      "description": "Impide que Windows se conecte automáticamente a redes Wi-Fi abiertas no seguras y evita compartir metadatos de redes inalámbricas.",
-      "benefits": [
-        "Protege contra puntos de acceso Wi-Fi falsos (Evil Twin attacks)",
-        "Evita conexiones involuntarias a redes públicas lentas"
-      ],
-      "riskLevel": "low",
-      "riskWarning": null,
-      "deviceScope": [
-        "laptop",
-        "desktop"
-      ],
-      "osCompatibility": [
-        "win10",
-        "win11"
-      ],
-      "tags": [
-        "wifi",
-        "wifi sense",
-        "seguridad",
-        "red",
-        "titus"
-      ],
-      "applyOps": [
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config",
-          "name": "AutoConnectAllowedOEM",
-          "value": 0
-        }
-      ],
-      "undoOps": [
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config",
-          "name": "AutoConnectAllowedOEM",
-          "value": 1
-        }
-      ],
-      "shortTitle": "Desactivar Wi-Fi Sense",
-      "summary": "Impide que el equipo se conecte solo a redes Wi-Fi públicas o comparta credenciales.",
-      "affects": null
-    },
-    {
       "id": "debloat_services_manual_pack",
       "category": "debloat",
       "subcategory": "Servicios en Segundo Plano (Titus)",
@@ -1892,9 +1830,16 @@
         {
           "type": "reg_dword",
           "hive": "HKLM",
+          "key": "SYSTEM\\CurrentControlSet\\Services\\RetailDemo",
+          "name": "Start",
+          "value": 3
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Services\\XblAuthManager",
           "name": "Start",
-          "value": 2
+          "value": 3
         }
       ],
       "shortTitle": "Servicios a inicio manual",
@@ -2018,21 +1963,21 @@
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry",
           "name": "Start",
-          "value": 3
+          "value": 4
         },
         {
           "type": "reg_dword",
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Services\\WdiSystemHost",
           "name": "Start",
-          "value": 2
+          "value": 3
         },
         {
           "type": "reg_dword",
           "hive": "HKLM",
           "key": "SYSTEM\\CurrentControlSet\\Services\\WdiServiceHost",
           "name": "Start",
-          "value": 2
+          "value": 3
         }
       ],
       "shortTitle": "Bloquear registro remoto",
@@ -2224,81 +2169,6 @@
       ],
       "shortTitle": "Desactivar Copilot y Recall",
       "summary": "Bloquea Copilot y las capturas continuas de pantalla de Windows Recall ahorrando RAM.",
-      "affects": null
-    },
-    {
-      "id": "debloat_cortana_websearch",
-      "category": "debloat",
-      "subcategory": "IA, Copilot y Bloatware",
-      "pack": "privacy_ai",
-      "title": "Desactivar Cortana y Búsqueda Conectada a la Nube",
-      "description": "Desactiva el asistente Cortana por directiva de sistema e impide que las búsquedas en el equipo envíen consultas a servidores web externos.",
-      "benefits": [
-        "Elimina procesos residuales de Cortana en segundo plano",
-        "Búsquedas locales más rápidas y privadas"
-      ],
-      "riskLevel": "low",
-      "riskWarning": null,
-      "deviceScope": [
-        "laptop",
-        "desktop"
-      ],
-      "osCompatibility": [
-        "win10",
-        "win11"
-      ],
-      "tags": [
-        "cortana",
-        "búsqueda",
-        "voz",
-        "ia",
-        "titus"
-      ],
-      "applyOps": [
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "AllowCortana",
-          "value": 0
-        },
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "ConnectedSearchUseWeb",
-          "value": 0
-        },
-        {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "DisableWebSearch",
-          "value": 1
-        }
-      ],
-      "undoOps": [
-        {
-          "type": "reg_delete",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "AllowCortana"
-        },
-        {
-          "type": "reg_delete",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "ConnectedSearchUseWeb"
-        },
-        {
-          "type": "reg_delete",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search",
-          "name": "DisableWebSearch"
-        }
-      ],
-      "shortTitle": "Desactivar Cortana y web",
-      "summary": "Elimina Cortana y evita que las búsquedas del equipo envíen datos a la nube.",
       "affects": null
     },
     {
@@ -2524,14 +2394,14 @@
       "category": "debloat",
       "subcategory": "IA, Copilot y Bloatware",
       "pack": "privacy_ai",
-      "title": "Desactivar Sincronización Forzada y Arranque Automático de OneDrive",
-      "description": "Desactiva por directiva la sincronización de archivos de OneDrive en segundo plano y elimina su arranque automático al encender el PC.",
+      "title": "Quitar el arranque automático de OneDrive",
+      "description": "Elimina la entrada de inicio de OneDrive del usuario. No bloquea OneDrive ni su sincronización. Para que vuelva a iniciarse con Windows, abre OneDrive y activa «Iniciar OneDrive automáticamente».",
       "benefits": [
-        "Evita que OneDrive secuestre las carpetas de Escritorio y Documentos",
-        "Libera ancho de banda de subida y recursos en el arranque"
+        "Arranque de Windows con un proceso menos",
+        "OneDrive sigue disponible cuando lo abres"
       ],
-      "riskLevel": "medium",
-      "riskWarning": "Si utilizas Microsoft OneDrive a diario para sincronizar tus documentos en la nube, no apliques este ajuste.",
+      "riskLevel": "low",
+      "riskWarning": null,
       "deviceScope": [
         "laptop",
         "desktop"
@@ -2549,17 +2419,16 @@
       ],
       "applyOps": [
         {
-          "type": "reg_dword",
-          "hive": "HKLM",
-          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\OneDrive",
-          "name": "DisableFileSyncNGSC",
-          "value": 1
-        },
-        {
           "type": "reg_delete",
           "hive": "HKCU",
           "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
           "name": "OneDrive"
+        },
+        {
+          "type": "reg_delete",
+          "hive": "HKLM",
+          "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\OneDrive",
+          "name": "DisableFileSyncNGSC"
         }
       ],
       "undoOps": [
@@ -2571,8 +2440,8 @@
         }
       ],
       "shortTitle": "Quitar arranque de OneDrive",
-      "summary": "Desactiva la sincronización obligatoria en segundo plano y el inicio con Windows.",
-      "affects": "No aplicar si guardas tus archivos principales en la nube de OneDrive."
+      "summary": "Evita que OneDrive se abra al iniciar Windows; puedes seguir usándolo cuando lo abras.",
+      "affects": null
     },
     {
       "id": "debloat_win11_classic_context_menu",
@@ -2793,6 +2662,20 @@
           "key": "Control Panel\\Accessibility\\StickyKeys",
           "name": "Flags",
           "value": "510"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\ToggleKeys",
+          "name": "Flags",
+          "value": "62"
+        },
+        {
+          "type": "reg_sz",
+          "hive": "HKCU",
+          "key": "Control Panel\\Accessibility\\Keyboard Response",
+          "name": "Flags",
+          "value": "126"
         }
       ],
       "shortTitle": "Quitar aviso Sticky Keys",
@@ -2863,6 +2746,20 @@
           "hive": "HKCU",
           "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
           "name": "SubscribedContent-338393Enabled",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-353694Enabled",
+          "value": 1
+        },
+        {
+          "type": "reg_dword",
+          "hive": "HKCU",
+          "key": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+          "name": "SubscribedContent-310093Enabled",
           "value": 1
         },
         {
@@ -3081,7 +2978,7 @@
         "Permite el uso de herramientas de undervolting y lectura de registros MSR"
       ],
       "riskLevel": "high",
-      "riskWarning": "Reduce una capa de seguridad de virtualización del kernel (Integridad de memoria). Recomendado solo para usuarios experimentados. Requiere reiniciar.",
+      "riskWarning": "Reduce una capa de seguridad del kernel (integridad de memoria). Requiere reiniciar. Revertir activa la integridad de memoria aunque antes estuviera desactivada.",
       "deviceScope": [
         "laptop",
         "desktop"

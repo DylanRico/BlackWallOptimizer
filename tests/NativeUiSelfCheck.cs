@@ -16,7 +16,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
-// Runs without showing a window, invoking Program.Main, or reading/modifying system settings.
+// Runs without showing a window or invoking Program.Main; registry writes use a unique disposable HKCU fixture.
 internal static class NativeUiSelfCheck
 {
     private static Type _type;
@@ -145,6 +145,7 @@ internal static class NativeUiSelfCheck
             if ((bool)Field("_sidebarCollapsed")) Call("ToggleSidebar");
             CheckVisualPreferences(args[1], preferences);
             CheckTweakPresentation(args[1]);
+            CheckTweakEngine();
             CheckGraphiteInteractions(args[1]);
             CheckStableSectionFilters(args[1]);
             CheckContrast();
@@ -312,7 +313,7 @@ internal static class NativeUiSelfCheck
         Check(!action.IsEnabled && !states["ui-action"], "pending action cannot announce success before the backend responds");
         pending.SetException(new InvalidOperationException("E_TEST_ACTION"));
         PumpUntil(() => action.IsEnabled);
-        Check(!states["ui-action"] && ((TextBlock)((DockPanel)layout.Children[1]).Children[1]).Text.Contains("E_TEST_ACTION"), "failed action preserves system state and displays the backend error");
+        Check(!states["ui-action"] && ((DockPanel)layout.Children[1]).Children.OfType<TextBlock>().Single().Text.Contains("E_TEST_ACTION"), "failed action preserves system state and displays the backend error");
         states["ui-action"] = true;
         pending = new TaskCompletionSource<int>();
         action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -420,7 +421,6 @@ internal static class NativeUiSelfCheck
         SetField("_activeTab", "optimization");
         SetField("_optDeviceScope", "all");
         SetField("_optRiskScope", "all");
-        SetField("_tweakSubcategoryScope", "Todas");
         SetField("_tweakSearchText", "");
         Call("RenderCurrentTab");
         var viewer = (ScrollViewer)Field("_mainScroll");
@@ -467,13 +467,59 @@ internal static class NativeUiSelfCheck
         checkbox.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
         SetField("_activeTab", "monitor");
         Call("RenderCurrentTab");
-        var console = (TextBox)Field("_liveConsoleTextBox");
-        Call("AppendLog", "PERF_TEST_FIRST", "TEST");
-        Call("AppendLog", "PERF_TEST_SECOND", "TEST");
-        Check(console.Text == string.Join("\r\n", (List<string>)Field("_consoleLogs")), "incremental log append retains complete ordered console text");
+        var rows = (ItemsControl)Field("_activityLogRows");
+        int before = rows.Items.Count;
+        _type.GetMethod("AppendLog", Private, null, new[] { typeof(string), typeof(string) }, null).Invoke(_window, new object[] { "PERF_TEST_FIRST", "TEST" });
+        _type.GetMethod("AppendLog", Private, null, new[] { typeof(string), typeof(string) }, null).Invoke(_window, new object[] { "PERF_TEST_SECOND", "ERROR" });
+        PumpUntil(() => !(bool)Field("_logFlushQueued"));
+        var entries = ((IList)Field("_activityLog")).Cast<object>().ToList();
+        Func<object, string, string> member = (o, n) => Convert.ToString(o.GetType().GetField(n).GetValue(o));
+        Check(rows.Items.Count == before + 2 && member(entries[entries.Count - 1], "Message") == "PERF_TEST_SECOND" && member(entries[entries.Count - 1], "Level") == "error", "log rows append in place with level from the legacy tag");
+        for (int i = 0; i < 700; i++) _type.GetMethod("AppendLog", Private, null, new[] { typeof(string), typeof(string), typeof(string) }, null).Invoke(_window, new object[] { "bulk " + i, "info", "Sistema" });
+        PumpUntil(() => !(bool)Field("_logFlushQueued"));
+        Check(((IList)Field("_activityLog")).Count == 500 && rows.Items.Count == 200, "activity log is bounded (500 kept, 200 rows shown)");
+        // Wheel and touchpad over any part of the log (text or the empty space beside it) must scroll the log itself.
+        var logScroll = (ScrollViewer)Field("_activityLogScroll");
+        rows.Measure(new Size(900, 320)); rows.Arrange(new Rect(0, 0, 900, 320)); rows.UpdateLayout();
+        logScroll.ScrollToEnd(); rows.UpdateLayout();
+        var chain = _type.GetMethod("ChainWheelToPage", Private);
+        var downAtEnd = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+        chain.Invoke(_window, new object[] { logScroll, downAtEnd });
+        var upAtEnd = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+        chain.Invoke(_window, new object[] { logScroll, upAtEnd });
+        Check(logScroll.ScrollableHeight > 0 && downAtEnd.Handled && !upAtEnd.Handled, "at the end of the log the wheel goes on to the page; scrolling back up stays in the log");
+        SetField("_activityFilter", "problems");
+        Call("RenderCurrentTab");
+        rows = (ItemsControl)Field("_activityLogRows");
+        Check(rows.Items.Count == ((IList)Field("_activityLog")).Cast<object>().Count(o => member(o, "Level") == "error" || member(o, "Level") == "warn"), "errors filter shows only problems");
+        SetField("_activityFilter", "all");
+        Call("RenderCurrentTab");
+
+        object op = Call("BeginOperation", "Prueba de operación", "Optimización", 2);
+        _type.GetMethod("StepOperation", Private).Invoke(_window, new object[] { op, "Paso uno", true, true });
+        _type.GetMethod("StepOperation", Private).Invoke(_window, new object[] { op, "Paso dos", true, true });
+        PumpUntil(() => !(bool)Field("_activityRefreshQueued"));
+        var footer = (ProgressBar)Field("_footerProgress");
+        Check(footer.Visibility == Visibility.Visible && Math.Abs(footer.Value - 100) < 0.1 && ((StackPanel)Field("_activityOpsPanel")).Children.Count >= 1, "a running operation shows its steps in the card and the footer");
+        Call("CompleteOperation", op, false, "Prueba: falló a propósito");
+        PumpUntil(() => !(bool)Field("_activityRefreshQueued"));
+        Check(footer.Visibility == Visibility.Collapsed && (bool)op.GetType().GetField("Finished").GetValue(op) && member(((IList)Field("_activityLog")).Cast<object>().Last(), "Level") == "error", "a failed operation ends with an error entry and clears the footer");
+
+        var processes = (List<Dictionary<string, object>>)Field("_liveScripts");
+        var original = processes.ToList();
+        processes.Clear();
+        processes.Add(new Dictionary<string, object> { { "pid", 2147483001 }, { "parentPid", 0 }, { "name", "cmd.exe" }, { "commandLine", "fixture" }, { "memoryMb", 1.0 } });
+        Call("RebuildProcessList");
+        var killButton = Descendants((DependencyObject)Field("_monitorProcessPanel")).OfType<Button>().First(b => Convert.ToString(b.Content) == "Terminar");
+        killButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var confirmBox = Descendants((DependencyObject)Field("_monitorProcessPanel")).OfType<Border>().First(b => b.Background == Field("RiskHighBg"));
+        Check(confirmBox.Visibility == Visibility.Visible && !killButton.IsEnabled && processes.Count == 1, "Terminar asks for confirmation before killing anything");
+        processes.Clear(); processes.AddRange(original);
+        Snapshot(directory, "native-activity.png", 1366, 900);
+
         SetField("_activeTab", "optimization");
         Call("RenderCurrentTab");
-        Check(Field("_liveConsoleTextBox") == null, "leaving monitor releases the detached console reference");
+        Check(Field("_activityLogRows") == null && Field("_monitorProcessPanel") == null, "leaving Actividad releases its live references");
     }
 
     private static void CheckContrast()
@@ -559,6 +605,9 @@ internal static class NativeUiSelfCheck
             Border border = child as Border;
             if (border != null && border.Child is TextBlock && ((TextBlock)border.Child).Text.Contains("Consecuencia visible")) warningVisible = border.Visibility == Visibility.Visible;
         }
+        foreach (UIElement child in footer.Children)
+            if (child is Button && Convert.ToString(((Button)child).Content).StartsWith("Detalles")) disclosure = (Button)child;
+        Check(disclosure != null && body.Children.OfType<TextBlock>().All(text => text.Text != "Explicación completa"), "card shows one benefit line and keeps the technical text behind Detalles");
         Check(warningVisible && details.Visibility == Visibility.Collapsed, "risk warning is outside the closed disclosure");
         SetField("_reduceMotion", true);
         disclosure.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -569,9 +618,124 @@ internal static class NativeUiSelfCheck
         Snapshot(directory, "native-risk-details.png", 1080, 700);
         disclosure.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(details.Visibility == Visibility.Collapsed, "disclosure closes without leaving hidden space");
+        var pair = (Panel)Activator.CreateInstance(_type.Assembly.GetType("Blackwall.AdaptiveCardGrid", true));
+        pair.GetType().GetProperty("Columns").SetValue(pair, 2, null);
+        pair.Children.Add((Border)Call("BuildTweakCard", fixture));
+        Border neighbour = (Border)Call("BuildTweakCard", fixture);
+        pair.Children.Add(neighbour);
+        Action layoutPair = () => { pair.Measure(new Size(900, double.PositiveInfinity)); pair.Arrange(new Rect(0, 0, 900, pair.DesiredSize.Height)); pair.UpdateLayout(); };
+        layoutPair();
+        double neighbourHeight = neighbour.ActualHeight;
+        Button opener = ((DockPanel)((Grid)((Border)pair.Children[0]).Child).Children[1]).Children.OfType<Button>().First(b => Convert.ToString(b.Content).StartsWith("Detalles"));
+        opener.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        layoutPair();
+        Check(((Border)pair.Children[0]).ActualHeight > neighbourHeight + 40 && Math.Abs(neighbour.ActualHeight - neighbourHeight) < 0.5, "opening details grows only that card, not its row neighbour");
+        opener.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        layoutPair();
+        Check(Math.Abs(((Border)pair.Children[0]).ActualHeight - neighbourHeight) < 0.5, "closing details returns the card to the row height");
+        SetField("_tweakAdvancedOpen", false); SetField("_tweakSearchText", ""); SetField("_optDeviceScope", "all");
+        var view = (FrameworkElement)Call("BuildTweaksView", "optimization");
+        Button advancedToggle = Descendants(view).OfType<Button>().FirstOrDefault(b => Convert.ToString(System.Windows.Automation.AutomationProperties.GetName(b)).StartsWith("Mostrar u ocultar"));
+        var advancedHost = advancedToggle == null ? null : (Panel)advancedToggle.Parent;
+        var advancedBody = advancedHost == null ? null : advancedHost.Children[advancedHost.Children.IndexOf(advancedToggle) + 1];
+        Check(advancedBody != null && advancedBody.Visibility == Visibility.Collapsed, "risky optimizations start in a closed, labelled Avanzadas group");
+        advancedToggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(advancedBody.Visibility == Visibility.Visible, "the Avanzadas group opens on demand");
+        SetField("_tweakAdvancedOpen", false); SetField("_optDeviceScope", "auto");
+
+        // Section switch paints the first cards at once and adds the rest on idle frames: none may be lost.
+        object loadedModules = Field("_loadedModules");
+        loadedModules.GetType().GetMethod("Add").Invoke(loadedModules, new object[] { "tweaks" });
+        SetField("_optDeviceScope", "all"); SetField("_tweakSearchText", ""); SetField("_pendingSearchId", null);
+        string previousTab = (string)Field("_activeTab");
+        Call("SwitchTab", "safety");
+        Call("SwitchTab", "debloat");
+        var catalog = (List<Dictionary<string, object>>)Field("_tweaks");
+        var debloatIds = new HashSet<string>(catalog.Where(t => Convert.ToString(t["category"]) == "debloat").Select(t => Convert.ToString(t["id"])));
+        Func<int> shownCards = () => Descendants((DependencyObject)((ScrollViewer)Field("_mainScroll")).Content).Count(e => e.Tag is string && debloatIds.Contains((string)e.Tag));
+        int firstFrameCards = shownCards();
+        PumpUntil(() => shownCards() == debloatIds.Count);
+        Check(firstFrameCards < debloatIds.Count && shownCards() == debloatIds.Count, "section switch defers cards but every card arrives (" + firstFrameCards + " then " + debloatIds.Count + ")");
+        SetField("_optDeviceScope", "auto");
+        Call("SwitchTab", previousTab);
         scroll.Content = previous;
         SetField("_reduceMotion", false);
         Call("UpdateMotionPreference");
+    }
+
+    // Real registry round-trip in a throwaway HKCU key; no system setting is touched.
+    private static void CheckTweakEngine()
+    {
+        string testKey = @"Software\BlackwallSelfCheck\" + Guid.NewGuid().ToString("N");
+        Func<Dictionary<string, object>, bool, Task> run = (t, apply) => (Task)Call("ExecuteTweakAsync", t, apply);
+        Func<object, int> toDword = v => (int)_type.GetMethod("ToRegistryDword", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new[] { v });
+        Check(toDword(2147483649L) == unchecked((int)0x80000001) && toDword(4294967295L) == -1 && toDword(-1) == -1 && toDword(38) == 38, "REG_DWORD values above int.MaxValue wrap instead of becoming 0");
+        bool rejected = false;
+        try { toDword(5000000000L); } catch (TargetInvocationException) { rejected = true; }
+        Check(rejected, "values outside REG_DWORD are rejected");
+
+        MethodInfo toolResult = _type.GetMethod("RequireSuccessfulToolResult", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((string)toolResult.Invoke(null, new object[] { "fixture.exe", 0, "Completed" }) == "Completed", "successful system tool output is preserved");
+        foreach (int code in new[] { 5, -1 })
+        {
+            bool toolFailed = false;
+            try { toolResult.Invoke(null, new object[] { "fixture.exe", code, "Denied" }); }
+            catch (TargetInvocationException ex) { toolFailed = ex.InnerException is InvalidOperationException && ex.InnerException.Message.Contains(code.ToString()); }
+            Check(toolFailed, "failed or timed-out system tool cannot become a success (" + code + ")");
+        }
+
+        object restore = Field("_autoRestorePoint");
+        SetField("_autoRestorePoint", false);
+        var states = (Dictionary<string, bool>)Field("_tweakStates");
+        Func<string, object, Dictionary<string, object>> dword = (name, value) => new Dictionary<string, object> { { "type", "reg_dword" }, { "hive", "HKCU" }, { "key", testKey }, { "name", name }, { "value", value } };
+        try
+        {
+            var good = new Dictionary<string, object> { { "id", "engine-good" }, { "title", "Prueba" },
+                { "applyOps", new object[] { dword("Big", 2147483649L), dword("Small", 1) } },
+                { "undoOps", new object[] { new Dictionary<string, object> { { "type", "reg_delete" }, { "hive", "HKCU" }, { "key", testKey }, { "name", "Big" } }, dword("Small", 0) } } };
+            Task applied = run(good, true);
+            PumpUntil(() => applied.IsCompleted);
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(testKey))
+                Check(applied.Status == TaskStatus.RanToCompletion && unchecked((uint)(int)k.GetValue("Big")) == 0x80000001 && states["engine-good"] && (bool)Call("IsTweakActive", good, null), "apply writes 0x80000001 correctly and detection confirms every value");
+            Task undone = run(good, false);
+            PumpUntil(() => undone.IsCompleted);
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(testKey))
+                Check(undone.Status == TaskStatus.RanToCompletion && k.GetValue("Big") == null && !(bool)Call("IsTweakActive", good, null), "undo restores and detection reports inactive");
+
+            var partial = new Dictionary<string, object> { { "id", "engine-partial" }, { "title", "Prueba" },
+                { "applyOps", new object[] { dword("Partial", 7), dword("Broken", 5000000000L) } } };
+            Task failed = run(partial, true);
+            PumpUntil(() => failed.IsCompleted);
+            Check(failed.IsFaulted && failed.Exception.InnerException.Message.Contains("1 de 2") && !states["engine-partial"], "a rejected change is reported as an error, never as applied");
+        }
+        finally
+        {
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(testKey, false);
+            SetField("_autoRestorePoint", restore);
+        }
+
+        // Static catalog contract: every value fits, every tweak can be reverted, no write to TrustedInstaller keys.
+        var tweaks = (List<Dictionary<string, object>>)Field("_tweaks");
+        var known = new HashSet<string> { "reg_dword", "reg_sz", "reg_delete", "reg_delete_tree", "powercfg", "service_stop" };
+        var problems = new List<string>();
+        foreach (var t in tweaks)
+        {
+            string id = Convert.ToString(t["id"]);
+            var apply = ((IEnumerable)t["applyOps"]).Cast<Dictionary<string, object>>().ToList();
+            var undo = t.ContainsKey("undoOps") ? ((IEnumerable)t["undoOps"]).Cast<Dictionary<string, object>>().ToList() : new List<Dictionary<string, object>>();
+            if (undo.Count == 0) problems.Add(id + ": sin reversión");
+            foreach (var op in apply.Concat(undo))
+            {
+                string type = Convert.ToString(op["type"]);
+                if (!known.Contains(type)) problems.Add(id + ": tipo " + type);
+                if (type == "reg_dword") { try { toDword(op["value"]); } catch (TargetInvocationException) { problems.Add(id + ": valor fuera de rango"); } }
+                if (op.ContainsKey("key") && Convert.ToString(op["key"]).Contains("WindowsRuntime\\ActivatableClassId")) problems.Add(id + ": clave de TrustedInstaller");
+            }
+            foreach (var op in apply.Where(o => Convert.ToString(o["type"]) == "reg_dword" && Convert.ToString(o["name"]) == "Start"))
+                if (!undo.Any(u => Convert.ToString(u["type"]) == "reg_dword" && Convert.ToString(u["key"]) == Convert.ToString(op["key"])) && Convert.ToInt64(op["value"]) == 4) problems.Add(id + ": servicio desactivado sin reversión");
+        }
+        Check(problems.Count == 0, "catalog contract holds for " + tweaks.Count + " tweaks" + (problems.Count > 0 ? ": " + string.Join("; ", problems) : ""));
+        Check(!tweaks.Any(t => Convert.ToString(t["id"]) == "debloat_wifi_sense" || Convert.ToString(t["id"]) == "debloat_cortana_websearch"), "features removed from Windows 11 are no longer offered");
     }
 
     private static void CheckCatalogSelection()
@@ -583,7 +747,7 @@ internal static class NativeUiSelfCheck
         Check((string)Call("SelectCatalog", embedded, newer) == embedded, "unsigned newer catalogs cannot override the packaged catalog");
         Check((string)Call("SelectCatalog", embedded, "invalid") == embedded, "invalid cache falls back to embedded catalog");
         Check((string)Call("SelectCatalog", embedded, "{\"lastUpdated\":\"2026-10-25\"}") == embedded, "cache without catalog entries is rejected");
-        Check(((ICollection)Field("_tweaks")).Count >= 45, "current catalog includes concise presentation fields");
+        Check(((ICollection)Field("_tweaks")).Count >= 43, "current catalog includes concise presentation fields");
     }
 
     private static void CheckWindowBounds()

@@ -226,6 +226,40 @@ namespace Blackwall
         }
     }
 
+    public class ActivityLogEntry
+    {
+        public DateTime Time;
+        public string Level;   // info | success | warn | error
+        public string Source;  // Optimización | Instalación | Sistema | Seguridad | Actualizaciones | Procesos
+        public string Message;
+    }
+
+    // Display row for the virtualized log: data + theme brushes resolved when the row is shown.
+    public class ActivityLogRow
+    {
+        public string Time { get; set; }
+        public string Source { get; set; }
+        public string Message { get; set; }
+        public Brush Dot { get; set; }
+        public Brush Text { get; set; }
+        public Brush Muted { get; set; }
+    }
+
+    // One user-visible task (apply a tweak, install an app...). Mutated only on the UI thread.
+    public class ActivityOperation
+    {
+        public string Title;
+        public string Source;
+        public string Step = "";
+        public int Steps;      // 0 = unknown length (indeterminate progress)
+        public int Done;
+        public bool Finished;
+        public bool Ok;
+        public string Summary = "";
+        public DateTime Started = DateTime.Now;
+        public DateTime Ended;
+    }
+
     public class MaterialCard : Border
     {
         private static readonly SolidColorBrush HighlightFill = CreateHighlightFill();
@@ -259,8 +293,14 @@ namespace Blackwall
     // Reflows existing cards without rebuilding them or losing selection and focus.
     public class AdaptiveCardGrid : Panel
     {
+        // An expanded card grows alone: its row neighbours keep the row's normal height.
+        public static readonly DependencyProperty ExpandedProperty = DependencyProperty.RegisterAttached(
+            "Expanded", typeof(bool), typeof(AdaptiveCardGrid), new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsParentMeasure));
+        public static void SetExpanded(UIElement element, bool value) { element.SetValue(ExpandedProperty, value); }
+        public static bool GetExpanded(UIElement element) { return (bool)element.GetValue(ExpandedProperty); }
         public int Columns { get; set; }
         private double[] _rowHeights = new double[0];
+        private double[] _baseHeights = new double[0];
         private readonly List<UIElement> _layoutChildren = new List<UIElement>();
         protected override Size MeasureOverride(Size available)
         {
@@ -269,12 +309,14 @@ namespace Blackwall
             foreach (UIElement child in Children) if (child.Visibility != Visibility.Collapsed) _layoutChildren.Add(child);
             Columns = Math.Max(1, Math.Min(Math.Max(1, _layoutChildren.Count), Math.Min(4, (int)(width / 310))));
             int rows = (_layoutChildren.Count + Columns - 1) / Columns;
-            if (_rowHeights.Length != rows) _rowHeights = new double[rows];
-            else Array.Clear(_rowHeights, 0, rows);
+            if (_rowHeights.Length != rows) { _rowHeights = new double[rows]; _baseHeights = new double[rows]; }
+            else { Array.Clear(_rowHeights, 0, rows); Array.Clear(_baseHeights, 0, rows); }
             for (int i = 0; i < _layoutChildren.Count; i++)
             {
-                _layoutChildren[i].Measure(new Size(width / Columns, double.PositiveInfinity));
-                _rowHeights[i / Columns] = Math.Max(_rowHeights[i / Columns], _layoutChildren[i].DesiredSize.Height);
+                UIElement child = _layoutChildren[i];
+                child.Measure(new Size(width / Columns, double.PositiveInfinity));
+                _rowHeights[i / Columns] = Math.Max(_rowHeights[i / Columns], child.DesiredSize.Height);
+                if (!GetExpanded(child)) _baseHeights[i / Columns] = Math.Max(_baseHeights[i / Columns], child.DesiredSize.Height);
             }
             return new Size(width, _rowHeights.Sum());
         }
@@ -283,7 +325,11 @@ namespace Blackwall
             double y = 0, width = bounds.Width / Math.Max(1, Columns);
             for (int i = 0; i < _layoutChildren.Count; i++)
             {
-                _layoutChildren[i].Arrange(new Rect((i % Columns) * width, y, width, _rowHeights[i / Columns]));
+                UIElement child = _layoutChildren[i];
+                int row = i / Columns;
+                double height = GetExpanded(child) ? Math.Max(child.DesiredSize.Height, _baseHeights[row])
+                    : _baseHeights[row] > 0 ? _baseHeights[row] : _rowHeights[row];
+                child.Arrange(new Rect((i % Columns) * width, y, width, height));
                 if (i % Columns == Columns - 1) y += _rowHeights[i / Columns];
             }
             return bounds;
@@ -421,8 +467,22 @@ namespace Blackwall
         private List<Dictionary<string, object>> _liveScripts = new List<Dictionary<string, object>>();
         private bool _monitorProcessesChanged;
         private readonly Dictionary<int, TextBlock> _monitorProcessMemoryLabels = new Dictionary<int, TextBlock>();
+        private StackPanel _monitorProcessPanel;
+        private TextBlock _monitorProcessTitle;
         private List<Dictionary<string, object>> _restorePoints = new List<Dictionary<string, object>>();
-        private List<string> _consoleLogs = new List<string>();
+        private const int ActivityLogLimit = 500;
+        private const int ActivityRowLimit = 200;
+        private readonly List<ActivityLogEntry> _activityLog = new List<ActivityLogEntry>();
+        private readonly List<ActivityOperation> _operations = new List<ActivityOperation>();
+        private int _operationsCompleted, _operationsFailed;
+        private string _activityFilter = "all";
+        private ItemsControl _activityLogRows;
+        private ScrollViewer _activityLogScroll;
+        private TextBlock _activityLogEmpty;
+        private StackPanel _activityOpsPanel;
+        private TextBlock _activitySummary;
+        private ProgressBar _footerProgress;
+        private bool _activityRefreshQueued;
 
         // Controles principales de UI
         private Border _rootBorder;
@@ -444,7 +504,6 @@ namespace Blackwall
         private ScrollViewer _mainScroll;
         private TextBlock _statusText;
         private TextBlock _taskText;
-        private TextBox _liveConsoleTextBox;
         private Dictionary<string, Button> _navButtons = new Dictionary<string, Button>();
         private DispatcherTimer _scriptMonitorTimer;
         private JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
@@ -537,8 +596,8 @@ namespace Blackwall
                 }
             };
 
-            _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [ARQUITECTURA] Interfaz WPF/.NET y herramientas nativas de Windows disponibles.");
-            _consoleLogs.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] [PRIVILEGIOS] Sesión actual ejecutándose como: " + (isAdmin ? "Administrador Elevado (UAC Activo)" : "Usuario Estándar"));
+            AppendLog("Blackwall iniciado · herramientas nativas de Windows disponibles.", "info", "Sistema");
+            AppendLog(isAdmin ? "Ejecutándose como administrador." : "Ejecutándose sin permisos de administrador: algunos ajustes no se podrán aplicar.", isAdmin ? "info" : "warn", "Sistema");
 
             LoadEmbeddedCatalogs();
             UpdateThemeBrushes();
@@ -607,7 +666,7 @@ namespace Blackwall
                 _reduceMotion = GetBool(settings, "reduceMotion");
                 if (settings.ContainsKey("dark")) _isDark = GetBool(settings, "dark");
             }
-            catch { _consoleLogs.Add("[INTERFAZ] Preferencias no válidas; se usarán los valores iniciales."); }
+            catch { AppendLog("Preferencias no válidas; se usarán los valores iniciales.", "warn", "Sistema"); }
         }
 
         private void SaveUiPreferences()
@@ -640,7 +699,9 @@ namespace Blackwall
             foreach (var viewer in _scrollViewers) viewer.ReduceMotion = !MotionAllowed;
             if (_motionToggle != null)
             {
-                _motionToggle.Content = _sidebarCollapsed ? (_reduceMotion ? "○" : "≈") : (_reduceMotion ? "Movimiento reducido" : "Animaciones activas");
+                _motionToggle.Content = NavContent(_reduceMotion ? "" : "", _sidebarCollapsed ? (_reduceMotion ? "Reducido" : "Animado") : (_reduceMotion ? "Movimiento reducido" : "Animaciones activas"), _sidebarCollapsed);
+                _motionToggle.HorizontalContentAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+                _motionToggle.Padding = _sidebarCollapsed ? new Thickness(0, 8, 0, 7) : new Thickness(14, 10, 10, 10);
                 _motionToggle.ToolTip = _reduceMotion ? "Activar animaciones" : "Reducir movimiento";
                 System.Windows.Automation.AutomationProperties.SetName(_motionToggle, Convert.ToString(_motionToggle.ToolTip));
             }
@@ -831,16 +892,18 @@ namespace Blackwall
             _sidebarColumn.Width = new GridLength(72);
             _sidebarBorder.Width = _sidebarCollapsed ? 72 : 248;
             if (_sidebarScrim != null) _sidebarScrim.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            _sidebarBorder.Padding = new Thickness(_sidebarCollapsed ? 8 : 14, 16, _sidebarCollapsed ? 8 : 14, 16);
+            _sidebarBorder.Padding = new Thickness(_sidebarCollapsed ? 6 : 14, 16, _sidebarCollapsed ? 6 : 14, 16);
             foreach (var element in _expandedSidebarElements) element.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
             foreach (var button in _navButtons.Values)
             {
-                var content = (Grid)button.Content;
-                for (int i = 1; i < content.Children.Count; i++) content.Children[i].Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
-                content.ColumnDefinitions[1].Width = _sidebarCollapsed ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
-                content.ColumnDefinitions[2].Width = new GridLength(_sidebarCollapsed ? 0 : 12);
+                var item = (string[])button.Tag;
+                button.Content = NavContent(item[0], item[1], _sidebarCollapsed);
+                button.HorizontalContentAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+                button.Padding = _sidebarCollapsed ? new Thickness(0, 8, 0, 7) : new Thickness(14, 10, 10, 10);
             }
-            _sidebarToggle.Content = _sidebarCollapsed ? "☰" : "☰    Contraer menú";
+            _sidebarToggle.Content = NavContent("", _sidebarCollapsed ? null : "Contraer menú", _sidebarCollapsed);
+            _sidebarToggle.HorizontalContentAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+            _sidebarToggle.Padding = _sidebarCollapsed ? new Thickness(0, 10, 0, 10) : new Thickness(14, 10, 10, 10);
             _sidebarToggle.ToolTip = _sidebarCollapsed ? "Expandir menú" : "Contraer menú";
             System.Windows.Automation.AutomationProperties.SetName(_sidebarToggle, Convert.ToString(_sidebarToggle.ToolTip));
             UpdateMotionPreference();
@@ -1063,7 +1126,9 @@ namespace Blackwall
             finally
             {
                 _readTasks.Remove(key);
-                if (CurrentModuleKey() == key && (!background || key != "monitor" || _monitorProcessesChanged)) RenderCurrentTab();
+                // A changed process list only rebuilds its own card: the activity log keeps its rows and scroll position.
+                if (CurrentModuleKey() == key && key == "monitor" && _monitorProcessPanel != null) { if (!background || _monitorProcessesChanged) RebuildProcessList(); }
+                else if (CurrentModuleKey() == key && (!background || key != "monitor" || _monitorProcessesChanged)) RenderCurrentTab();
                 if (!background) UpdateActivityPanel();
             }
         }
@@ -1519,34 +1584,13 @@ namespace Blackwall
             await Task.Run(() =>
             {
                 var map = new Dictionary<string, bool>();
+                string scheme = null; // powercfg runs once per refresh, only if a tweak needs it
+                Func<string> activeScheme = () => scheme ?? (scheme = RunSystemToolDirect("powercfg.exe", "/getactivescheme"));
                 foreach (var t in _tweaks)
                 {
                     string id = GetStr(t, "id");
                     if (string.IsNullOrEmpty(id)) continue;
-
-                    bool active = false;
-                    var ops = t.ContainsKey("applyOps") ? ConvertToDictList(t["applyOps"]) : new List<Dictionary<string, object>>();
-                    foreach (var op in ops)
-                    {
-                        string type = GetStr(op, "type");
-                        if (type == "reg_dword")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            active = CheckRegDword(root, GetStr(op, "key"), GetStr(op, "name"), GetInt(op, "value"));
-                            break;
-                        }
-                        else if (type == "reg_sz")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            string name = GetStr(op, "name");
-                            if (string.IsNullOrEmpty(name))
-                                active = CheckRegKeyExists(root, GetStr(op, "key"));
-                            else
-                                active = CheckRegString(root, GetStr(op, "key"), name, GetStr(op, "value"));
-                            break;
-                        }
-                    }
-                    map[id] = active;
+                    map[id] = IsTweakActive(t, activeScheme);
                 }
                 _tweakStates = map;
             });
@@ -1637,8 +1681,13 @@ namespace Blackwall
             {
                 TextBlock label;
                 if (_monitorProcessMemoryLabels.TryGetValue(GetInt(process, "pid"), out label))
-                    label.Text = "PID " + GetStr(process, "pid") + "  •  " + GetStr(process, "name") + "  •  Parent PID: " + GetStr(process, "parentPid") + "  •  RAM: " + GetStr(process, "memoryMb") + " MB";
+                    label.Text = ProcessMetaText(process);
             }
+        }
+
+        private string ProcessMetaText(Dictionary<string, object> process)
+        {
+            return "PID " + GetStr(process, "pid") + "  ·  proceso padre " + GetStr(process, "parentPid") + "  ·  " + GetStr(process, "memoryMb") + " MB";
         }
 
         private Task RefreshRestorePointsNativeAsync()
@@ -1673,71 +1722,49 @@ namespace Blackwall
         {
             string id = GetStr(tweak, "id");
             string title = GetStr(tweak, "title");
+            string shortTitle = GetStr(tweak, "shortTitle");
+            if (string.IsNullOrEmpty(shortTitle)) shortTitle = title;
+            string opsKey = apply ? "applyOps" : "undoOps";
+            var opsList = tweak.ContainsKey(opsKey) ? ConvertToDictList(tweak[opsKey]) : new List<Dictionary<string, object>>();
+            bool restorePoint = apply && _autoRestorePoint;
+            var activity = BeginOperation((apply ? "Aplicar · " : "Revertir · ") + shortTitle, "Optimización", opsList.Count + (restorePoint ? 1 : 0));
 
-            if (apply && _autoRestorePoint)
+            if (restorePoint)
             {
                 SetStatus("🛡️ Verificando Punto de Restauración nativo...", title);
-                await CreateRestorePointNativeInternalAsync("Blackwall Pre-" + id);
+                StepOperation(activity, "Creando punto de restauración");
+                if (!await CreateRestorePointNativeInternalAsync("Blackwall Pre-" + id))
+                    AppendLog("No se pudo crear el punto de restauración; se continúa con el ajuste.", "warn", "Seguridad");
             }
 
             SetStatus((apply ? "⚡ Aplicando nativamente: " : "↩️ Revirtiendo nativamente: ") + title, id);
-            AppendLog((apply ? "[APPLY-NATIVE] " : "[UNDO-NATIVE] ") + title, "TWEAK");
 
-            string opsKey = apply ? "applyOps" : "undoOps";
-            var opsList = tweak.ContainsKey(opsKey) ? ConvertToDictList(tweak[opsKey]) : new List<Dictionary<string, object>>();
-
+            var failures = new List<string>();
             await Task.Run(() =>
             {
                 foreach (var op in opsList)
                 {
-                    string type = GetStr(op, "type");
-                    try
-                    {
-                        if (type == "reg_dword")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            using (var k = root.CreateSubKey(GetStr(op, "key"), true))
-                            {
-                                if (k != null) k.SetValue(GetStr(op, "name"), GetInt(op, "value"), RegistryValueKind.DWord);
-                            }
-                        }
-                        else if (type == "reg_sz")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            using (var k = root.CreateSubKey(GetStr(op, "key"), true))
-                            {
-                                if (k != null) k.SetValue(GetStr(op, "name"), GetStr(op, "value"), RegistryValueKind.String);
-                            }
-                        }
-                        else if (type == "reg_delete")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            using (var k = root.OpenSubKey(GetStr(op, "key"), true))
-                            {
-                                if (k != null) k.DeleteValue(GetStr(op, "name"), false);
-                            }
-                        }
-                        else if (type == "reg_delete_tree")
-                        {
-                            RegistryKey root = GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
-                            root.DeleteSubKeyTree(GetStr(op, "key"), false);
-                        }
-                        else if (type == "powercfg")
-                        {
-                            RunSystemToolDirect("powercfg.exe", GetStr(op, "args"));
-                        }
-                        else if (type == "service_stop")
-                        {
-                            StopServiceViaWmi(GetStr(op, "name"));
-                        }
-                    }
+                    StepOperation(activity, DescribeTweakOperation(op));
+                    try { RunTweakOperation(op); }
                     catch (Exception ex)
                     {
-                        AppendLog("Aviso en operación [" + type + "]: " + ex.Message + " (Asegúrate de abrir como Administrador para claves HKLM).", "WARN");
+                        bool tolerated = GetBool(op, "allowFailure");
+                        string reason = ex.Message.Split(new[] { (char)13, (char)10 }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? ex.GetType().Name;
+                        AppendLog(DescribeTweakOperation(op) + (tolerated ? " (ya estaba hecho): " : " falló: ") + reason, tolerated ? "info" : "warn", "Optimización");
+                        if (!tolerated) failures.Add(DescribeTweakOperation(op) + ": " + reason);
                     }
                 }
             });
 
+            if (failures.Count > 0)
+            {
+                // Never report success for a change Windows rejected: re-read the real state and surface the error.
+                _tweakStates[id] = await Task.Run(() => IsTweakActive(tweak));
+                string error = failures.Count + " de " + opsList.Count + " cambios no se aplicaron (" + failures[0] + ")";
+                CompleteOperation(activity, false, shortTitle + ": " + error);
+                throw new InvalidOperationException(error);
+            }
+            CompleteOperation(activity, true, shortTitle + (apply ? ": aplicada" : ": revertida") + " (" + opsList.Count + " cambios)");
             _tweakStates[id] = apply;
             SetStatus("🟢 " + (apply ? "Aplicado: " : "Revertido: ") + title, "Listo");
             Dispatcher.Invoke(() =>
@@ -1751,6 +1778,105 @@ namespace Blackwall
                     RenderCurrentTab();
                 }
             });
+        }
+
+        // Human-readable step: "Registro · Services\DiagTrack › Start = 4", "Energía · powercfg /setactive …".
+        private string DescribeTweakOperation(Dictionary<string, object> op)
+        {
+            string type = GetStr(op, "type");
+            string[] parts = GetStr(op, "key").Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            string key = string.Join("\\", parts.Skip(Math.Max(0, parts.Length - 2)));
+            string name = GetStr(op, "name");
+            if (type == "reg_dword" || type == "reg_sz") return "Registro · " + key + " › " + (name.Length == 0 ? "(predeterminado)" : name) + " = " + GetStr(op, "value");
+            if (type == "reg_delete") return "Registro · borrar " + key + " › " + name;
+            if (type == "reg_delete_tree") return "Registro · borrar la clave " + key;
+            if (type == "powercfg") return "Energía · powercfg " + GetStr(op, "args");
+            if (type == "service_stop") return "Servicio · detener " + name;
+            return type;
+        }
+
+        private RegistryKey TweakHive(Dictionary<string, object> op)
+        {
+            return GetStr(op, "hive") == "HKLM" ? Registry.LocalMachine : Registry.CurrentUser;
+        }
+
+        // REG_DWORD is 32-bit unsigned on disk; catalog values above int.MaxValue (0x80000001...) must wrap, not become 0.
+        internal static int ToRegistryDword(object value)
+        {
+            long raw = Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+            if (raw < int.MinValue || raw > uint.MaxValue) throw new ArgumentOutOfRangeException("value", raw, "Fuera del rango de REG_DWORD.");
+            return raw > int.MaxValue ? unchecked((int)(uint)raw) : (int)raw;
+        }
+
+        private void RunTweakOperation(Dictionary<string, object> op)
+        {
+            string type = GetStr(op, "type");
+            if (type == "reg_dword" || type == "reg_sz")
+            {
+                using (var k = TweakHive(op).CreateSubKey(GetStr(op, "key"), true))
+                {
+                    if (k == null) throw new InvalidOperationException("No se pudo abrir la clave " + GetStr(op, "key"));
+                    if (type == "reg_dword") k.SetValue(GetStr(op, "name"), ToRegistryDword(op["value"]), RegistryValueKind.DWord);
+                    else k.SetValue(GetStr(op, "name"), GetStr(op, "value"), RegistryValueKind.String);
+                }
+            }
+            else if (type == "reg_delete")
+            {
+                using (var k = TweakHive(op).OpenSubKey(GetStr(op, "key"), true))
+                {
+                    if (k != null) k.DeleteValue(GetStr(op, "name"), false);
+                }
+            }
+            else if (type == "reg_delete_tree")
+            {
+                TweakHive(op).DeleteSubKeyTree(GetStr(op, "key"), false);
+            }
+            else if (type == "powercfg")
+            {
+                int exitCode;
+                string output = RunSystemToolDirect("powercfg.exe", GetStr(op, "args"), out exitCode);
+                if (exitCode != 0) throw new InvalidOperationException("powercfg devolvió " + exitCode + (string.IsNullOrWhiteSpace(output) ? "" : ": " + output));
+            }
+            else if (type == "service_stop")
+            {
+                StopServiceViaWmi(GetStr(op, "name")); // best effort: persistence comes from the Start value in the same tweak
+            }
+            else throw new NotSupportedException("Tipo de operación desconocido: " + type);
+        }
+
+        // Active only when every verifiable change of applyOps is present, so a half-applied tweak is not shown as active.
+        private bool IsTweakActive(Dictionary<string, object> t, Func<string> activeScheme = null)
+        {
+            int checkedOps = 0;
+            foreach (var op in t.ContainsKey("applyOps") ? ConvertToDictList(t["applyOps"]) : new List<Dictionary<string, object>>())
+            {
+                string type = GetStr(op, "type");
+                bool? matches = null;
+                try
+                {
+                if (type == "reg_dword") matches = CheckRegDword(TweakHive(op), GetStr(op, "key"), GetStr(op, "name"), ToRegistryDword(op["value"]));
+                else if (type == "reg_sz")
+                {
+                    string name = GetStr(op, "name");
+                    matches = string.IsNullOrEmpty(name) ? CheckRegKeyExists(TweakHive(op), GetStr(op, "key")) : CheckRegString(TweakHive(op), GetStr(op, "key"), name, GetStr(op, "value"));
+                }
+                else if (type == "reg_delete")
+                {
+                    using (var k = TweakHive(op).OpenSubKey(GetStr(op, "key"))) matches = k == null || k.GetValue(GetStr(op, "name")) == null;
+                }
+                else if (type == "powercfg")
+                {
+                    string[] parts = GetStr(op, "args").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2 && parts[0].Equals("/setactive", StringComparison.OrdinalIgnoreCase) && !parts[1].Equals("scheme_current", StringComparison.OrdinalIgnoreCase))
+                        matches = (activeScheme ?? (() => RunSystemToolDirect("powercfg.exe", "/getactivescheme")))().IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+                }
+                catch (Exception) { matches = false; } // unreadable or invalid means "not verified as active"
+                if (matches == null) continue;
+                checkedOps++;
+                if (!matches.Value) return false;
+            }
+            return checkedOps > 0;
         }
 
         private void StopServiceViaWmi(string serviceName)
@@ -1770,6 +1896,20 @@ namespace Blackwall
 
         private string RunSystemToolDirect(string exeName, string arguments)
         {
+            int code;
+            string output = RunSystemToolDirect(exeName, arguments, out code);
+            return RequireSuccessfulToolResult(exeName, code, output);
+        }
+
+        internal static string RequireSuccessfulToolResult(string tool, int exitCode, string output)
+        {
+            if (exitCode != 0) throw new InvalidOperationException(tool + " devolvió el código " + exitCode + (string.IsNullOrWhiteSpace(output) ? "" : ": " + LastMeaningfulLines(output, 2)));
+            return output;
+        }
+
+        private string RunSystemToolDirect(string exeName, string arguments, out int exitCode)
+        {
+            exitCode = -1;
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -1785,9 +1925,10 @@ namespace Blackwall
                 {
                     Task<string> outTask = p.StandardOutput.ReadToEndAsync();
                     Task<string> errTask = p.StandardError.ReadToEndAsync();
-                    p.WaitForExit(180000);
+                    if (!p.WaitForExit(180000)) return "Tiempo de espera agotado";
                     string sOut = outTask.Result;
                     string sErr = errTask.Result;
+                    exitCode = p.ExitCode;
                     return string.IsNullOrWhiteSpace(sOut) ? sErr.Trim() : sOut.Trim();
                 }
             }
@@ -1846,6 +1987,7 @@ namespace Blackwall
             string silentArgs = GetStr(app, "silentArgs");
 
             bool installedOk = false;
+            var activity = BeginOperation("Instalar · " + name, "Instalación", 3);
 
             // Paso 1: Intentar con WinGet directo si no está forzado el modo HTTPS directo
             if (!_preferDirectHttpsDownload)
@@ -1854,7 +1996,7 @@ namespace Blackwall
                 if (!string.IsNullOrEmpty(wingetPath))
                 {
                     SetStatus("📦 Instalando " + name + " mediante WinGet nativo...", wgId);
-                    AppendLog("[WINGET] Ejecutando directamente: " + wingetPath + " install --id " + wgId + " --silent", "INSTALL");
+                    StepOperation(activity, "WinGet · instalando " + wgId);
 
                     int exitCode = await Task.Run(() =>
                     {
@@ -1874,7 +2016,7 @@ namespace Blackwall
                                 string sOut = p.StandardOutput.ReadToEnd();
                                 p.WaitForExit(300000);
                                 if (!string.IsNullOrWhiteSpace(sOut))
-                                    AppendLog(sOut.Trim(), "WINGET");
+                                    AppendLog(LastMeaningfulLines(sOut, 3), "WINGET");
                                 return p.ExitCode;
                             }
                         }
@@ -1888,16 +2030,16 @@ namespace Blackwall
                     if (exitCode == 0 || exitCode == -1978335189)
                     {
                         installedOk = true;
-                        AppendLog("[WINGET] " + name + " completado exitosamente.", "INSTALL");
+                        StepOperation(activity, "WinGet terminó correctamente", true, false);
                     }
                     else
                     {
-                        AppendLog("[WINGET] Código " + exitCode + " en este PC. Cambiando automáticamente a Descarga HTTPS Directa Nativa...", "FALLBACK");
+                        AppendLog("WinGet devolvió el código " + exitCode + "; se usa la descarga directa del fabricante.", "FALLBACK");
                     }
                 }
                 else
                 {
-                    AppendLog("[WINGET] No encontrado en PATH de este PC. Usando Descarga HTTPS Directa Nativa...", "FALLBACK");
+                    AppendLog("WinGet no está disponible; se usa la descarga directa del fabricante.", "FALLBACK");
                 }
             }
 
@@ -1912,7 +2054,7 @@ namespace Blackwall
                     if (File.Exists(targetFile)) File.Delete(targetFile);
 
                     SetStatus("⬇️ Descargando instalador oficial de " + name + " (HTTPS directo)...", "0%");
-                    AppendLog("[HTTPS-DIRECT] Descargando desde CDN oficial: " + fbUrl, "DOWNLOAD");
+                    StepOperation(activity, "Descargando desde " + new Uri(fbUrl).Host);
 
                     using (WebClient wc = new WebClient())
                     {
@@ -1921,13 +2063,14 @@ namespace Blackwall
                         {
                             double mbRecv = Math.Round(ev.BytesReceived / (1024.0 * 1024.0), 1);
                             SetStatus("⬇️ Descargando " + name + ": " + ev.ProgressPercentage + "% (" + mbRecv + " MB)", ev.ProgressPercentage + "%");
+                            StepOperation(activity, "Descargando " + ev.ProgressPercentage + " % (" + mbRecv + " MB)", false, false);
                         };
                         await wc.DownloadFileTaskAsync(new Uri(fbUrl), targetFile);
                     }
 
                     // Ejecutar el instalador oficial firmado del fabricante de forma desatendida
                     SetStatus("⚙️ Ejecutando instalador silencioso de " + name + "...", silentArgs);
-                    AppendLog("[INSTALLER] Ejecutando paquete oficial: " + targetFile + " " + silentArgs, "INSTALL");
+                    StepOperation(activity, "Ejecutando el instalador oficial en modo silencioso");
 
                     await Task.Run(() =>
                     {
@@ -1958,15 +2101,15 @@ namespace Blackwall
                     });
 
                     installedOk = true;
-                    AppendLog("[INSTALLER] " + name + " instalado correctamente por vía directa.", "SUCCESS");
                 }
                 catch (Exception ex)
                 {
-                    AppendLog("Error en descarga/instalación de " + name + ": " + ex.Message, "ERROR");
+                    AppendLog("Error en descarga/instalación de " + name + ": " + ex.Message, "error", "Instalación");
                     SetStatus("🔴 Error al instalar " + name, "Error");
                 }
             }
 
+            CompleteOperation(activity, installedOk, name + (installedOk ? ": instalado" : ": no se pudo instalar"));
             await RefreshInstalledAppsNativeAsync();
             if (installedOk)
             {
@@ -1977,10 +2120,13 @@ namespace Blackwall
         private async Task InstallSelectedAppsBatchAsync()
         {
             var chosen = _apps.Where(a => _selectedApps.Contains(GetStr(a, "id"))).ToList();
+            var activity = BeginOperation("Instalar " + chosen.Count + " aplicaciones", "Instalación", chosen.Count);
             for (int i = 0; i < chosen.Count; i++)
             {
+                StepOperation(activity, GetStr(chosen[i], "name"), true, false);
                 await InstallSingleAppAsync(chosen[i]);
             }
+            CompleteOperation(activity, true, "Instalación de " + chosen.Count + " aplicaciones terminada");
         }
 
         private async Task UpgradeAllAppsAsync()
@@ -1992,14 +2138,17 @@ namespace Blackwall
                 return;
             }
             SetStatus("🔄 Actualizando todas las apps del PC (winget upgrade --all --silent)...", "WinGet Nativo");
-            AppendLog("Ejecutando directamente: " + wingetPath + " upgrade --all --include-unknown --silent", "WINGET");
-            await Task.Run(() =>
+            bool updated = await RunOperationAsync("Actualizar todas las aplicaciones", "Instalación", op => Task.Run(() =>
             {
-                string res = RunSystemToolDirect(wingetPath, "upgrade --all --include-unknown --silent --accept-package-agreements --accept-source-agreements --disable-interactivity");
-                if (!string.IsNullOrWhiteSpace(res)) AppendLog(res, "WINGET");
-            });
+                StepOperation(op, "WinGet · upgrade --all");
+                int code;
+                string res = RunSystemToolDirect(wingetPath, "upgrade --all --include-unknown --silent --accept-package-agreements --accept-source-agreements --disable-interactivity", out code);
+                if (!string.IsNullOrWhiteSpace(res)) AppendLog(LastMeaningfulLines(res, 5), "WINGET");
+                if (code != 0) throw new InvalidOperationException("WinGet devolvió el código " + code);
+                return "Aplicaciones actualizadas";
+            }));
             await RefreshInstalledAppsNativeAsync();
-            SetStatus("🟢 Todas las aplicaciones actualizadas", "Listo");
+            if (updated) SetStatus("🟢 Todas las aplicaciones actualizadas", "Listo");
         }
 
         // ====================================================================
@@ -2035,11 +2184,11 @@ namespace Blackwall
         private async Task CreateRestorePointNowAsync()
         {
             SetStatus("🛡️ Creando Punto de Restauración nativo en C:\\...", "SystemRestore WMI");
-            AppendLog("Invocando API nativa root\\default:SystemRestore.CreateRestorePoint...", "SAFETY");
+            var activity = BeginOperation("Crear punto de restauración", "Seguridad", 0);
             bool ok = await CreateRestorePointNativeInternalAsync("Blackwall Restore Point (" + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + ")");
+            CompleteOperation(activity, ok, ok ? "Punto de restauración creado" : "Windows no creó el punto de restauración");
             if (ok)
             {
-                AppendLog("Punto de Restauración creado exitosamente.", "SAFETY");
                 SetStatus("🟢 Punto de Restauración creado en C:\\", "Listo");
             }
             else
@@ -2389,6 +2538,52 @@ namespace Blackwall
                     </Setter>
                 </Style>");
             ((Style)Resources[typeof(Button)]).Setters.Add(new EventSetter(FrameworkElement.LoadedEvent, new RoutedEventHandler(OnMotionButtonLoaded)));
+            // Navigation rail item (Windows 11 style): rounded hover, short accent indicator on the left, 2px focus ring.
+            Resources["NavButton"] = (Style)System.Windows.Markup.XamlReader.Parse(@"
+                <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>
+                    <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
+                    <Setter Property='Background' Value='Transparent'/>
+                    <Setter Property='BorderBrush' Value='Transparent'/>
+                    <Setter Property='Template'>
+                        <Setter.Value><ControlTemplate TargetType='Button'>
+                            <Grid>
+                                <Border x:Name='Bg' Background='{TemplateBinding Background}' CornerRadius='10'/>
+                                <Border x:Name='Hover' Background='{DynamicResource MaterialButtonSurface}' CornerRadius='10' Opacity='0' IsHitTestVisible='False'/>
+                                <Border Width='3' Height='18' CornerRadius='1.5' HorizontalAlignment='Left' VerticalAlignment='Center' Background='{TemplateBinding BorderBrush}' IsHitTestVisible='False'/>
+                                <ContentPresenter Margin='{TemplateBinding Padding}' HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}' VerticalAlignment='Center' RecognizesAccessKey='True'/>
+                                <Border x:Name='FocusRing' BorderBrush='{DynamicResource CyberFocusBrush}' BorderThickness='2' Margin='-2' CornerRadius='12' IsHitTestVisible='False' Visibility='Hidden'/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='0.55'/></Trigger>
+                                <Trigger Property='IsPressed' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='0.85'/></Trigger>
+                                <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='FocusRing' Property='Visibility' Value='Visible'/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate></Setter.Value>
+                    </Setter>
+                </Style>");
+            // Text-only actions (Detalles, Cambiar, Mostrar): no pill frame, same 2px keyboard focus ring.
+            Resources["FlatButton"] = (Style)System.Windows.Markup.XamlReader.Parse(@"
+                <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>
+                    <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
+                    <Setter Property='Background' Value='Transparent'/>
+                    <Setter Property='Template'>
+                        <Setter.Value><ControlTemplate TargetType='Button'>
+                            <Grid>
+                                <Border x:Name='Bg' Background='{TemplateBinding Background}' Padding='{TemplateBinding Padding}' CornerRadius='6'>
+                                    <ContentPresenter HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}' VerticalAlignment='Center' RecognizesAccessKey='True'/>
+                                </Border>
+                                <Border x:Name='FocusRing' BorderBrush='{DynamicResource CyberFocusBrush}' BorderThickness='2' Margin='-3' CornerRadius='8' IsHitTestVisible='False' Visibility='Hidden'/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Bg' Property='Opacity' Value='0.75'/></Trigger>
+                                <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='FocusRing' Property='Visibility' Value='Visible'/></Trigger>
+                                <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.4'/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate></Setter.Value>
+                    </Setter>
+                </Style>");
             Resources[typeof(ScrollBar)] = (Style)System.Windows.Markup.XamlReader.Parse(@"
                 <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
                        xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='ScrollBar'>
@@ -2688,15 +2883,13 @@ namespace Blackwall
 
             _sidebarBorder = sidebarBorder;
             DockPanel sidebarDock = new DockPanel { LastChildFill = true };
-            _sidebarToggle = CreateStyledButton("☰    Contraer menú", false);
-            _sidebarToggle.Padding = new Thickness(8, 8, 8, 8);
-            _sidebarToggle.Margin = new Thickness(0, 0, 0, 16);
+            _sidebarToggle = new Button { Cursor = Cursors.Hand, Foreground = TextSecondary, Margin = new Thickness(0, 0, 0, 12) };
+            _sidebarToggle.SetResourceReference(FrameworkElement.StyleProperty, "NavButton");
             _sidebarToggle.Click += (s, e) => ToggleSidebar();
             DockPanel.SetDock(_sidebarToggle, Dock.Top);
             sidebarDock.Children.Add(_sidebarToggle);
-            _motionToggle = CreateStyledButton("Animaciones activas", false);
-            _motionToggle.Padding = new Thickness(6, 8, 6, 8);
-            _motionToggle.Margin = new Thickness(0, 12, 0, 0);
+            _motionToggle = new Button { Cursor = Cursors.Hand, Foreground = TextSecondary, Margin = new Thickness(0, 12, 0, 0) };
+            _motionToggle.SetResourceReference(FrameworkElement.StyleProperty, "NavButton");
             _motionToggle.Click += (s, e) => { _reduceMotion = !_reduceMotion; UpdateMotionPreference(); SaveUiPreferences(); };
             DockPanel.SetDock(_motionToggle, Dock.Bottom);
             sidebarDock.Children.Add(_motionToggle);
@@ -2712,7 +2905,7 @@ namespace Blackwall
 
             AddNavGroupLabel(navStack, "HERRAMIENTAS");
             AddNavButton(navStack, "apps", "Software");
-            AddNavButton(navStack, "monitor", "Procesos");
+            AddNavButton(navStack, "monitor", "Actividad");
 
             AddNavGroupLabel(navStack, "RECUPERACIÓN");
             AddNavButton(navStack, "safety", "Seguridad");
@@ -2803,8 +2996,10 @@ namespace Blackwall
                 Margin = new Thickness(0, 0, 12, 0)
             };
             footerRight.Children.Add(_taskText);
+            _footerProgress = new ProgressBar { Width = 90, Height = 4, Maximum = 100, Foreground = CyberCyanBrush, Background = BgElevated, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0), Visibility = Visibility.Collapsed };
+            footerRight.Children.Add(_footerProgress);
 
-            Button consoleJumpBtn = CreateStyledButton("Consola en vivo ↗", false);
+            Button consoleJumpBtn = CreateStyledButton("Actividad ↗", false);
             consoleJumpBtn.Padding = new Thickness(10, 4, 10, 4);
             consoleJumpBtn.Click += (s, e) => SwitchTab("monitor");
             footerRight.Children.Add(consoleJumpBtn);
@@ -2841,36 +3036,42 @@ namespace Blackwall
             parent.Children.Add(label);
         }
 
+        private static readonly FontFamily NavIconFont = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
+        private static readonly Dictionary<string, string> NavGlyphs = new Dictionary<string, string>
+        {
+            { "hardware", "" },     // System (PC)
+            { "optimization", "" }, // LightningBolt
+            { "debloat", "" },      // Lock
+            { "apps", "" },         // Download
+            { "monitor", "" },      // Diagnostic (activity)
+            { "safety", "" }        // UpdateRestore
+        };
+
+        // Collapsed rail: icon centred over a short label. Expanded: icon and label in a row.
+        private UIElement NavContent(string glyph, string text, bool collapsed)
+        {
+            var icon = new TextBlock { Text = glyph, FontFamily = NavIconFont, FontSize = collapsed ? 18 : 16, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var panel = new StackPanel { Orientation = collapsed ? Orientation.Vertical : Orientation.Horizontal, HorizontalAlignment = collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left };
+            panel.Children.Add(icon);
+            if (string.IsNullOrEmpty(text)) return panel;
+            var label = new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            if (collapsed) { label.FontSize = 10; label.FontWeight = FontWeights.Normal; label.Margin = new Thickness(0, 4, 0, 0); label.HorizontalAlignment = HorizontalAlignment.Center; label.MaxWidth = 60; } // regular weight: the active tab must not truncate
+            else { label.FontSize = 12.5; label.Margin = new Thickness(12, 0, 0, 0); icon.Width = 22; }
+            panel.Children.Add(label);
+            return panel;
+        }
+
         private void AddNavButton(StackPanel parent, string tabKey, string label)
         {
             string title = Regex.Replace(label, @"^[^\p{L}]+", "");
-            Grid content = new Grid();
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(25) });
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
-            string[] glyphs = { "\uE7F4", "\uE9D9", "\uE72E", "\uE71D", "\uE9D5", "\uE83D" };
-            TextBlock number = new TextBlock { Text = glyphs[_navButtons.Count], FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 16, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock name = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-            TextBlock arrow = new TextBlock { Text = "›", FontSize = 17, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
-            Grid.SetColumn(name, 1);
-            Grid.SetColumn(arrow, 2);
-            content.Children.Add(number);
-            content.Children.Add(name);
-            content.Children.Add(arrow);
             Button btn = new Button
             {
-                Content = content,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 9, 10, 9),
+                Tag = new[] { NavGlyphs[tabKey], title },
                 Margin = new Thickness(0, 2, 0, 2),
-                FontSize = 12,
                 Cursor = Cursors.Hand,
-                BorderThickness = new Thickness(2, 0, 0, 0),
-                BorderBrush = Brushes.Transparent,
-                Background = Brushes.Transparent,
-                Foreground = TextSecondary,
-                ToolTip = title
+                Foreground = TextSecondary
             };
+            btn.SetResourceReference(FrameworkElement.StyleProperty, "NavButton");
             System.Windows.Automation.AutomationProperties.SetName(btn, title);
             ToolTip navigationTip = new ToolTip { Content = title, PlacementTarget = btn, Placement = PlacementMode.Right };
             ToolTipService.SetInitialShowDelay(btn, 350);
@@ -3024,7 +3225,7 @@ namespace Blackwall
         {
             _pendingSearchId = id;
             if (tab == "apps") { _appCategoryScope = "Todas"; _appSearchText = ""; }
-            else { _optDeviceScope = "all"; _optRiskScope = "all"; _tweakSubcategoryScope = "Todas"; _tweakSearchText = ""; }
+            else { _optDeviceScope = "all"; _optRiskScope = "all"; _tweakSearchText = ""; }
             SwitchTab(tab);
         }
 
@@ -3083,11 +3284,15 @@ namespace Blackwall
             _tweakCardUpdaters.Clear();
             _sectionSearch = null;
             _installSelectedButton = null;
-            _liveConsoleTextBox = null;
+            _activityLogRows = null; _activityLogScroll = null; _activityLogEmpty = null; _activityOpsPanel = null; _activitySummary = null;
+            _monitorProcessPanel = null; _monitorProcessTitle = null;
             _monitorProcessMemoryLabels.Clear();
 
             UIElement content = null;
             string moduleKey = CurrentModuleKey();
+            // Refreshes of the same section and jumps to a search result keep every card in place (scroll position, BringIntoView).
+            if (!sameSection && _pendingSearchId == null) BeginProgressivePage();
+            else { _deferredCards.Clear(); _deferredGeneration++; _pageCardBudget = int.MaxValue; }
             if (moduleKey != "hardware" && !_loadedModules.Contains(moduleKey))
                 content = CreateBanner(_readErrors.ContainsKey(moduleKey) ? "Lectura interrumpida" : "Preparando módulo", "El contenido estará disponible al completar la lectura. Puedes seguir navegando.");
             else switch (_activeTab)
@@ -3112,6 +3317,12 @@ namespace Blackwall
                     break;
             }
 
+            _pageCardBudget = int.MaxValue;
+            if (_deferredCards.Count > 0)
+            {
+                int generation = _deferredGeneration;
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => FlushDeferredCards(generation)));
+            }
             if (content != null)
             {
                 Grid centeredWrap = new Grid
@@ -3332,7 +3543,6 @@ namespace Blackwall
         // --------------------------------------------------------------------
         // MÓDULO B: OPTIMIZACIÓN Y DEBLOAT
         // --------------------------------------------------------------------
-        private string _tweakSubcategoryScope = "Todas";
 
         private UIElement BuildDashboardSummary()
         {
@@ -3382,6 +3592,24 @@ namespace Blackwall
             return frame;
         }
 
+        private int _pageCardBudget = int.MaxValue;
+        private readonly Queue<KeyValuePair<Panel, UIElement>> _deferredCards = new Queue<KeyValuePair<Panel, UIElement>>();
+        private int _deferredGeneration;
+
+        // ponytail: fixed budget of 4 cards (first row); the rest joins within the next frames. Measure the viewport if pop-in is visible on tall screens.
+        private void BeginProgressivePage() { _deferredCards.Clear(); _deferredGeneration++; _pageCardBudget = 4; }
+
+        private void FlushDeferredCards(int generation)
+        {
+            if (generation != _deferredGeneration) return; // a newer page replaced this one
+            for (int i = 0; i < 4 && _deferredCards.Count > 0; i++) // ~10 ms per idle frame
+            {
+                var pending = _deferredCards.Dequeue();
+                pending.Key.Children.Add(pending.Value);
+            }
+            if (_deferredCards.Count > 0) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => FlushDeferredCards(generation)));
+        }
+
         // Filter existing controls so keyboard composition, focus and action handlers survive each keystroke.
         private Func<string, int> CreateCardFilter(Panel panel, IEnumerable<Dictionary<string, object>> items, Func<Dictionary<string, object>, UIElement> build, params string[] fields)
         {
@@ -3389,7 +3617,9 @@ namespace Blackwall
             foreach (var item in items)
             {
                 var card = build(item);
-                panel.Children.Add(card);
+                // The first screenful is laid out in the click's frame; the rest joins on the next idle frames.
+                if (_pageCardBudget-- > 0) panel.Children.Add(card);
+                else _deferredCards.Enqueue(new KeyValuePair<Panel, UIElement>(panel, card));
                 entries.Add(new KeyValuePair<UIElement, string>(card, string.Join(" ", fields.Select(field => GetStr(item, field)))));
             }
             return query =>
@@ -3408,18 +3638,51 @@ namespace Blackwall
         private async Task ApplyBlackwallPackAsync(string packId, string packLabel)
         {
             await CreateRestorePointNowAsync();
-            int count = 0;
-            foreach (var t in _tweaks)
+            await ApplyTweakBatchAsync(_tweaks.Where(t => GetStr(t, "pack") == packId).ToList(), "Paquete " + packLabel);
+            await RefreshTweaksStateNativeAsync();
+        }
+
+        // One failing tweak no longer aborts the batch or hides behind a success message.
+        private async Task ApplyTweakBatchAsync(List<Dictionary<string, object>> batch, string label)
+        {
+            var failed = new List<string>();
+            var activity = BeginOperation(label, "Optimización", batch.Count);
+            foreach (var t in batch)
             {
-                if (GetStr(t, "pack") == packId)
+                StepOperation(activity, GetStr(t, "shortTitle"), true, false);
+                try { await ExecuteTweakAsync(t, true); }
+                catch (Exception ex)
                 {
-                    await ExecuteTweakAsync(t, true);
-                    count++;
+                    _tweakActionErrors[GetStr(t, "id")] = ex.Message;
+                    failed.Add(GetStr(t, "shortTitle"));
+                    AppendLog(GetStr(t, "shortTitle") + ": " + ex.Message, "ERROR");
                 }
             }
-            AppendLog("Paquete Blackwall aplicado: " + packLabel + " (" + count + " tweaks ejecutados).", "PACK");
-            SetStatus("🟢 Paquete Aplicado: " + packLabel + " (" + count + " reglas)", "Completado");
-            await RefreshTweaksStateNativeAsync();
+            CompleteOperation(activity, failed.Count == 0, label + ": " + (batch.Count - failed.Count) + " de " + batch.Count + " aplicadas" + (failed.Count > 0 ? " · fallaron " + string.Join(", ", failed) : ""));
+            if (failed.Count > 0) SetStatus(label + ": " + failed.Count + " no se aplicaron (" + string.Join(", ", failed) + ")", "Consulta la consola");
+            else SetStatus("🟢 " + label + ": " + batch.Count + " aplicadas", "Completado");
+        }
+
+        private bool _tweakAdvancedOpen;
+        private bool _tweakDevicePickerOpen;
+
+        private Button CreateLinkButton(string text)
+        {
+            var link = new Button
+            {
+                Content = text,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 2, 4, 2),
+                MinHeight = 0,
+                Foreground = CyberCyanBrush,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            link.SetResourceReference(FrameworkElement.StyleProperty, "FlatButton");
+            return link;
         }
 
         private UIElement BuildTweaksView(string categoryType)
@@ -3428,196 +3691,195 @@ namespace Blackwall
             bool isLaptop = _hardware == null || GetBool(GetDict(_hardware, "chassis"), "isLaptop");
             string effectiveDevice = _optDeviceScope == "auto" ? (isLaptop ? "laptop" : "desktop") : _optDeviceScope;
 
-            StackPanel topBtns = new StackPanel { Orientation = Orientation.Horizontal };
-            Button recheckBtn = CreateStyledButton("Revisar estados", false);
-            recheckBtn.Margin = new Thickness(0, 0, 8, 0);
+            // 1. CABECERA COMPACTA: título, equipo detectado (cambiable) y revisión de estados.
+            Border head = CreateCardContainer();
+            head.Margin = new Thickness(0, 0, 0, 14);
+            head.Padding = new Thickness(20, 16, 20, 16);
+            StackPanel headStack = new StackPanel();
+
+            DockPanel titleLine = new DockPanel();
+            StackPanel headActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            string deviceText = _optDeviceScope == "auto" ? (isLaptop ? "Portátil detectado" : "Escritorio detectado")
+                : effectiveDevice == "laptop" ? "Mostrando: portátil" : effectiveDevice == "desktop" ? "Mostrando: escritorio" : "Mostrando: todos los equipos";
+            headActions.Children.Add(new TextBlock { Text = deviceText, Foreground = TextSecondary, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            Button changeDevice = CreateLinkButton(_tweakDevicePickerOpen ? "Cerrar" : "Cambiar");
+            System.Windows.Automation.AutomationProperties.SetName(changeDevice, "Cambiar el tipo de equipo");
+            changeDevice.Click += (s, e) => { _tweakDevicePickerOpen = !_tweakDevicePickerOpen; RenderCurrentTab(); };
+            headActions.Children.Add(changeDevice);
+            headActions.Children.Add(new TextBlock { Text = "·", Foreground = TextSecondary, Margin = new Thickness(4, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            Button recheckBtn = CreateLinkButton("↻ Revisar estados");
             recheckBtn.Click += async (s, e) => await RefreshTweaksStateNativeAsync();
-            topBtns.Children.Add(recheckBtn);
-
-            Button applyProfileBtn = CreateStyledButton("Perfil de riesgo bajo (" + (isLaptop ? "Laptop" : "Desktop") + ")", true);
-            applyProfileBtn.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", applyProfileBtn, () => ApplyRecommendedSafeProfileAsync(isLaptop ? "laptop" : "desktop"));
-            topBtns.Children.Add(applyProfileBtn);
-
-            root.Children.Add(CreateBanner(
-                categoryType == "optimization"
-                    ? "Optimización del sistema"
-                    : "Privacidad y debloat",
-                "Ajustes de rendimiento, servicios y privacidad. Revisa el nivel de riesgo antes de aplicar cambios.",
-                topBtns
-            ));
-
-            // Barra de Paquetes Maestros de 1 Clic (Blackwall Bundles)
-            Border packCard = CreateCardContainer();
-            packCard.Margin = new Thickness(0, 0, 0, 14);
-            packCard.Padding = new Thickness(14, 10, 14, 10);
-            StackPanel packStack = new StackPanel();
-            packStack.Children.Add(new TextBlock
+            headActions.Children.Add(recheckBtn);
+            DockPanel.SetDock(headActions, Dock.Right);
+            titleLine.Children.Add(headActions);
+            titleLine.Children.Add(new TextBlock
             {
-                Text = "Paquetes de ajustes · revisa el impacto antes de aplicar",
-                Foreground = CyberCyanBrush,
-                FontSize = 10.8,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 8)
+                Text = categoryType == "optimization" ? "Optimización" : "Privacidad y debloat",
+                Foreground = TextPrimary,
+                FontSize = 22,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
             });
+            headStack.Children.Add(titleLine);
 
-            WrapPanel packBtns = new WrapPanel();
+            if (_tweakDevicePickerOpen)
+            {
+                WrapPanel devicePicker = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+                AddFilterButton(devicePicker, "Automático", _optDeviceScope == "auto", () => { _optDeviceScope = "auto"; _tweakDevicePickerOpen = false; RenderCurrentTab(); });
+                AddFilterButton(devicePicker, "Portátil", _optDeviceScope == "laptop", () => { _optDeviceScope = "laptop"; _tweakDevicePickerOpen = false; RenderCurrentTab(); });
+                AddFilterButton(devicePicker, "Escritorio", _optDeviceScope == "desktop", () => { _optDeviceScope = "desktop"; _tweakDevicePickerOpen = false; RenderCurrentTab(); });
+                AddFilterButton(devicePicker, "Todos", _optDeviceScope == "all", () => { _optDeviceScope = "all"; _tweakDevicePickerOpen = false; RenderCurrentTab(); });
+                headStack.Children.Add(devicePicker);
+            }
+
+            // 2. PERFILES: un clic para empezar; los que conllevan riesgo lo dicen en el nombre.
+            headStack.Children.Add(new TextBlock { Text = "Empieza con un perfil", Foreground = TextSecondary, FontSize = 12, Margin = new Thickness(0, 14, 0, 8) });
+            WrapPanel profiles = new WrapPanel();
+            Button applyProfileBtn = CreateStyledButton("Recomendado · riesgo bajo", true);
+            applyProfileBtn.Margin = new Thickness(0, 0, 8, 6);
+            applyProfileBtn.ToolTip = "Aplica solo las optimizaciones de riesgo bajo para tu " + (isLaptop ? "portátil" : "escritorio") + ".";
+            applyProfileBtn.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", applyProfileBtn, () => ApplyRecommendedSafeProfileAsync(isLaptop ? "laptop" : "desktop"));
+            profiles.Children.Add(applyProfileBtn);
+            Action<string, string, string> addPack = (label, packId, packLog) =>
+            {
+                Button pack = CreateStyledButton(label, false);
+                pack.Margin = new Thickness(0, 0, 8, 6);
+                pack.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", pack, () => ApplyBlackwallPackAsync(packId, packLog));
+                profiles.Children.Add(pack);
+            };
             if (categoryType == "debloat")
             {
-                Button btnTitus = CreateStyledButton("Esenciales · riesgo bajo", true);
-                btnTitus.Margin = new Thickness(0, 0, 8, 6);
-                btnTitus.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnTitus, () => ApplyBlackwallPackAsync("titus_essential", "Chris Titus Essential"));
-                packBtns.Children.Add(btnTitus);
-
-                Button btnPrivacy = CreateStyledButton("IA y privacidad · riesgo bajo", false);
-                btnPrivacy.Margin = new Thickness(0, 0, 8, 6);
-                btnPrivacy.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnPrivacy, () => ApplyBlackwallPackAsync("privacy_ai", "Anti-IA & Privacidad"));
-                packBtns.Children.Add(btnPrivacy);
-
-                Button btnServices = CreateStyledButton("Servicios · precaución", false);
-                btnServices.Margin = new Thickness(0, 0, 8, 6);
-                btnServices.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnServices, () => ApplyBlackwallPackAsync("services_light", "Servicios Ligeros"));
-                packBtns.Children.Add(btnServices);
+                addPack("Esenciales", "titus_essential", "Chris Titus Essential");
+                addPack("IA y privacidad", "privacy_ai", "Anti-IA & Privacidad");
+                addPack("Servicios · precaución", "services_light", "Servicios Ligeros");
             }
             else
             {
-                Button btnCeito = CreateStyledButton("Juego y respuesta · precaución", true);
-                btnCeito.Margin = new Thickness(0, 0, 8, 6);
-                btnCeito.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnCeito, () => ApplyBlackwallPackAsync("ceito_gaming", "Ceito Gaming & Baja Latencia"));
-                packBtns.Children.Add(btnCeito);
-
-                Button btnPower = CreateStyledButton("Energía (" + (isLaptop ? "Laptop Batería/Térmico" : "Desktop Ultimate") + ")", false);
-                btnPower.Margin = new Thickness(0, 0, 8, 6);
-                btnPower.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", btnPower, () => ApplyBlackwallPackAsync("adaptive_power", "Energía Adaptativa"));
-                packBtns.Children.Add(btnPower);
+                addPack("Juego · precaución", "ceito_gaming", "Ceito Gaming & Baja Latencia");
+                addPack(isLaptop ? "Batería y temperatura" : "Máxima potencia", "adaptive_power", "Energía Adaptativa");
             }
-            packStack.Children.Add(packBtns);
-            packCard.Child = packStack;
-            root.Children.Add(packCard);
+            headStack.Children.Add(profiles);
+            head.Child = headStack;
+            root.Children.Add(head);
 
-            // Filtros de Dispositivo y Nivel de Riesgo
-            WrapPanel filterBar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            AddFilterButton(filterBar, "Portátil", effectiveDevice == "laptop", () => { _optDeviceScope = "laptop"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "Escritorio", effectiveDevice == "desktop", () => { _optDeviceScope = "desktop"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "Ambos", effectiveDevice == "all", () => { _optDeviceScope = "all"; RenderCurrentTab(); });
-
-            AddFilterButton(filterBar, "Todos los riesgos", _optRiskScope == "all", () => { _optRiskScope = "all"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "Bajo", _optRiskScope == "low", () => { _optRiskScope = "low"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "Medio", _optRiskScope == "medium", () => { _optRiskScope = "medium"; RenderCurrentTab(); });
-            AddFilterButton(filterBar, "Alto", _optRiskScope == "high", () => { _optRiskScope = "high"; RenderCurrentTab(); });
-            root.Children.Add(filterBar);
-
-            // Filtro por Subcategoría
-            var subcats = new List<string> { "Todas" };
-            foreach (var t in _tweaks)
-            {
-                if (GetStr(t, "category") != categoryType) continue;
-                string sc = GetStr(t, "subcategory");
-                if (!string.IsNullOrEmpty(sc) && !subcats.Contains(sc)) subcats.Add(sc);
-            }
-            if (!subcats.Contains(_tweakSubcategoryScope)) _tweakSubcategoryScope = "Todas";
-
-            WrapPanel subcatBar = new WrapPanel { Margin = new Thickness(0, 0, 0, 14) };
-            foreach (string sc in subcats)
-            {
-                string scCopy = sc;
-                AddFilterButton(subcatBar, scCopy == "Todas" ? "Todas las categorías" : scCopy, _tweakSubcategoryScope == scCopy, () =>
-                {
-                    _tweakSubcategoryScope = scCopy;
-                    RenderCurrentTab();
-                });
-            }
-            root.Children.Add(subcatBar);
-
-            // Filtrado de tweaks para esta vista
+            // 3. LISTA: recomendadas a la vista, avanzadas (precaución/alto) en un grupo aparte y cerrado.
             var matchingTweaks = new List<Dictionary<string, object>>();
             foreach (var t in _tweaks)
             {
                 if (GetStr(t, "category") != categoryType) continue;
                 if (effectiveDevice != "all" && !ListContains(t, "deviceScope", effectiveDevice)) continue;
                 if (_optRiskScope != "all" && GetStr(t, "riskLevel") != _optRiskScope) continue;
-                if (_tweakSubcategoryScope != "Todas" && GetStr(t, "subcategory") != _tweakSubcategoryScope) continue;
                 matchingTweaks.Add(t);
             }
+            Func<Dictionary<string, object>, bool> isAdvanced = t => { string r = GetStr(t, "riskLevel"); return r == "medium" || r == "high"; };
 
             StackPanel tweaksContainer = new StackPanel();
             var filters = new List<Func<string, int>>();
-
-            if (_tweakSubcategoryScope == "Todas")
+            Func<List<Dictionary<string, object>>, StackPanel, List<Func<string, int>>, bool, int> addSections = (list, target, sink, flat) =>
             {
-                // Agrupación visual por Subcategoría con encabezados claros y amplia separación
                 var subcatOrder = new List<string>();
-                foreach (var t in matchingTweaks)
+                foreach (var t in list)
                 {
                     string sc = GetStr(t, "subcategory");
                     if (string.IsNullOrEmpty(sc)) sc = "General";
                     if (!subcatOrder.Contains(sc)) subcatOrder.Add(sc);
                 }
-
+                if (flat) subcatOrder = new List<string> { null }; // one grid, subcategory stays in Detalles
                 foreach (string sc in subcatOrder)
                 {
-                    var tweaksInSubcat = matchingTweaks.Where(t => (GetStr(t, "subcategory") == sc || (string.IsNullOrEmpty(GetStr(t, "subcategory")) && sc == "General"))).ToList();
-                    if (tweaksInSubcat.Count == 0) continue;
-
-                    StackPanel groupSection = new StackPanel { Margin = new Thickness(0, 8, 0, 22) };
-
+                    var tweaksInSubcat = sc == null ? list : list.Where(t => (GetStr(t, "subcategory") == sc || (string.IsNullOrEmpty(GetStr(t, "subcategory")) && sc == "General"))).ToList();
+                    StackPanel groupSection = new StackPanel { Margin = new Thickness(0, 6, 0, 18) };
                     DockPanel grpHdr = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-                    Border countBadge = new Border
-                    {
-                        Background = BgElevated,
-                        CornerRadius = new CornerRadius(4),
-                        Padding = new Thickness(8, 3, 8, 3),
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    countBadge.Child = new TextBlock
-                    {
-                        Text = tweaksInSubcat.Count + (tweaksInSubcat.Count == 1 ? " optimización" : " optimizaciones"),
-                        Foreground = TextSecondary,
-                        FontSize = 11,
-                        FontWeight = FontWeights.Bold
-                    };
-                    DockPanel.SetDock(countBadge, Dock.Right);
-                    grpHdr.Children.Add(countBadge);
-
-                    StackPanel titleRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                    titleRow.Children.Add(new TextBlock
-                    {
-                        Text = sc,
-                        Foreground = CyberCyanBrush,
-                        FontWeight = FontWeights.ExtraBold,
-                        FontSize = 14.5
-                    });
-                    grpHdr.Children.Add(titleRow);
-                    groupSection.Children.Add(grpHdr);
-
-                    Border divider = new Border
-                    {
-                        Background = BorderSubtle,
-                        Height = 1,
-                        Margin = new Thickness(0, 0, 0, 14)
-                    };
-                    groupSection.Children.Add(divider);
-
+                    TextBlock countText = new TextBlock { Foreground = TextSecondary, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center };
+                    DockPanel.SetDock(countText, Dock.Right);
+                    grpHdr.Children.Add(countText);
+                    grpHdr.Children.Add(new TextBlock { Text = sc, Foreground = TextPrimary, FontWeight = FontWeights.SemiBold, FontSize = 14 });
+                    if (sc != null) groupSection.Children.Add(grpHdr);
                     AdaptiveCardGrid groupGrid = new AdaptiveCardGrid { Columns = 2 };
                     var filterGroup = CreateCardFilter(groupGrid, tweaksInSubcat, BuildTweakCard, "title", "description");
-                    filters.Add(query =>
+                    sink.Add(query =>
                     {
                         int count = filterGroup(query);
                         groupSection.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
-                        ((TextBlock)countBadge.Child).Text = count + (count == 1 ? " optimización" : " optimizaciones");
+                        countText.Text = count.ToString();
                         return count;
                     });
                     groupSection.Children.Add(groupGrid);
-                    tweaksContainer.Children.Add(groupSection);
+                    target.Children.Add(groupSection);
                 }
-            }
-            else
+                return subcatOrder.Count;
+            };
+
+            Func<string, SolidColorBrush, string, int, Border> groupHeader = (title, dot, detail, total) =>
             {
-                AdaptiveCardGrid singleGrid = new AdaptiveCardGrid { Columns = 2 };
-                filters.Add(CreateCardFilter(singleGrid, matchingTweaks, BuildTweakCard, "title", "description"));
-                tweaksContainer.Children.Add(singleGrid);
+                var bar = new Border { BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 4, 0, 10), Margin = new Thickness(0, 4, 0, 12) };
+                var line = new StackPanel { Orientation = Orientation.Horizontal };
+                line.Children.Add(new System.Windows.Shapes.Ellipse { Width = 10, Height = 10, Fill = dot, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center });
+                line.Children.Add(new TextBlock { Text = title, Foreground = CyberCyanBrush, FontWeight = FontWeights.Bold, FontSize = 15.5, VerticalAlignment = VerticalAlignment.Center });
+                line.Children.Add(new TextBlock { Text = "  " + detail, Foreground = TextSecondary, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+                bar.Child = line;
+                return bar;
+            };
+
+            var recommended = matchingTweaks.Where(t => !isAdvanced(t)).ToList();
+            var advanced = matchingTweaks.Where(isAdvanced).ToList();
+            var recommendedFilters = new List<Func<string, int>>();
+            var advancedFilters = new List<Func<string, int>>();
+            StackPanel recommendedBody = new StackPanel();
+            StackPanel advancedBody = new StackPanel();
+            addSections(recommended, recommendedBody, recommendedFilters, false);
+            addSections(advanced, advancedBody, advancedFilters, true);
+
+            Border recommendedHeader = groupHeader("Recomendadas", RiskLowText, "riesgo bajo · " + recommended.Count, recommended.Count);
+            if (recommended.Count > 0) { tweaksContainer.Children.Add(recommendedHeader); tweaksContainer.Children.Add(recommendedBody); }
+            filters.Add(query => { int c = recommendedFilters.Sum(f => f(query)); recommendedHeader.Visibility = c == 0 ? Visibility.Collapsed : Visibility.Visible; return c; });
+
+            if (advanced.Count > 0)
+            {
+                Button advancedToggle = new Button
+                {
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    MinHeight = 0,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    Cursor = Cursors.Hand,
+                    Margin = new Thickness(0, 10, 0, 0)
+                };
+                DockPanel toggleLine = new DockPanel();
+                advancedToggle.SetResourceReference(FrameworkElement.StyleProperty, "FlatButton");
+                TextBlock chevron = new TextBlock { Foreground = CyberCyanBrush, FontSize = 13, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+                DockPanel.SetDock(chevron, Dock.Right);
+                toggleLine.Children.Add(chevron);
+                Border advancedHeader = groupHeader("Avanzadas", RiskMedText, "requieren cuidado · " + advanced.Count, advanced.Count);
+                advancedHeader.Margin = new Thickness(0);
+                advancedHeader.Padding = new Thickness(0);
+                advancedHeader.BorderThickness = new Thickness(0);
+                toggleLine.Children.Add(advancedHeader);
+                advancedToggle.Content = new Border { BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 4, 0, 10), Child = toggleLine };
+                System.Windows.Automation.AutomationProperties.SetName(advancedToggle, "Mostrar u ocultar optimizaciones avanzadas");
+                tweaksContainer.Children.Add(advancedToggle);
+                advancedBody.Margin = new Thickness(0, 12, 0, 0);
+                tweaksContainer.Children.Add(advancedBody);
+                string lastQuery = _tweakSearchText ?? "";
+                Action syncAdvanced = () =>
+                {
+                    bool open = _tweakAdvancedOpen || lastQuery.Trim().Length > 0; // a search always reveals matching advanced items
+                    advancedBody.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+                    chevron.Text = open ? "Ocultar ▴" : "Mostrar ▾";
+                };
+                advancedToggle.Click += (s, e) => { _tweakAdvancedOpen = !_tweakAdvancedOpen; syncAdvanced(); };
+                filters.Add(query =>
+                {
+                    lastQuery = query ?? "";
+                    int c = advancedFilters.Sum(f => f(query));
+                    advancedToggle.Visibility = c == 0 ? Visibility.Collapsed : Visibility.Visible;
+                    syncAdvanced();
+                    return c;
+                });
             }
 
-            var empty = CreateBanner("Sin resultados", "Prueba otro texto o cambia los filtros de riesgo, equipo o categoría.");
+            var empty = CreateBanner("Sin resultados", "Prueba otro texto o cambia el tipo de equipo.");
             tweaksContainer.Children.Add(empty);
             Action<string> applyFilter = query => { int count = 0; foreach (var filter in filters) count += filter(query); empty.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed; };
             root.Children.Add(CreateSectionSearch(_tweakSearchText, value => { _tweakSearchText = value; applyFilter(value); }));
@@ -3648,9 +3910,6 @@ namespace Blackwall
 
             StackPanel sp = new StackPanel();
 
-            // 1. CABECERA: Badges a la izquierda + Switch Toggle Cyberpunk a la derecha
-            DockPanel header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-
             Button switchButton = CreateStyledButton(isApplied ? "Revertir" : "Aplicar", !isApplied);
             switchButton.IsEnabled = stateKnown;
             switchButton.ToolTip = "Cambiar el estado de " + shortTitle;
@@ -3658,99 +3917,91 @@ namespace Blackwall
             switchButton.IsEnabled = stateKnown && !_pendingTweaks.Contains(id);
             if (_pendingTweaks.Contains(id)) switchButton.Content = isApplied ? "Revirtiendo…" : "Aplicando…";
 
-            // Badges en la cabecera
-            WrapPanel badgesPanel = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
-            string riskText = risk == "low" ? "◇ RIESGO BAJO" : risk == "medium" ? "⚠ PRECAUCIÓN" : "⚠ RIESGO ALTO";
-            Border riskBadge = CreateBadge(riskText, risk);
-            riskBadge.Margin = new Thickness(0, 0, 6, 2);
-            badgesPanel.Children.Add(riskBadge);
-
-            if (!string.IsNullOrEmpty(affects))
+            // 1. TÍTULO + PUNTO DE RIESGO: el nivel exacto queda en el tooltip y el nombre accesible.
+            string riskLabel = risk == "high" ? "Riesgo alto" : risk == "medium" ? "Precaución" : "Riesgo bajo";
+            DockPanel titleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+            var riskDot = new System.Windows.Shapes.Ellipse
             {
-                Border affectsBadge = new Border
-                {
-                    Background = RiskMedBg,
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(6, 2, 6, 2),
-                    Margin = new Thickness(0, 0, 6, 2),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Child = new TextBlock
-                    {
-                        Text = "Afecta: " + affects,
-                        Foreground = RiskMedText,
-                        FontSize = 10,
-                        FontWeight = FontWeights.SemiBold
-                    }
-                };
-                badgesPanel.Children.Add(affectsBadge);
-            }
-
-            if (!string.IsNullOrEmpty(subcat))
-            {
-                Border subcatBadge = new Border
-                {
-                    Background = BgElevated,
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(6, 2, 6, 2),
-                    Margin = new Thickness(0, 0, 6, 2),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Child = new TextBlock
-                    {
-                        Text = subcat.ToUpperInvariant(),
-                        Foreground = TextSecondary,
-                        FontSize = 9.5,
-                        FontWeight = FontWeights.Bold
-                    }
-                };
-                badgesPanel.Children.Add(subcatBadge);
-            }
-
-            header.Children.Add(badgesPanel);
-            sp.Children.Add(header);
-
-            // 2. TÍTULO CORTO Y RESUMEN DE 1 LÍNEA
+                Width = 9, Height = 9, Margin = new Thickness(10, 5, 0, 0), VerticalAlignment = VerticalAlignment.Top,
+                Fill = risk == "high" ? RiskHighText : risk == "medium" ? RiskMedText : RiskLowText,
+                ToolTip = riskLabel
+            };
+            System.Windows.Automation.AutomationProperties.SetName(riskDot, riskLabel);
+            DockPanel.SetDock(riskDot, Dock.Right);
+            titleRow.Children.Add(riskDot);
             TextBlock titleText = new TextBlock
             {
                 Text = shortTitle,
                 Foreground = TextPrimary,
-                FontSize = 13.5,
+                FontSize = 14,
                 FontWeight = FontWeights.Bold,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 3)
+                TextWrapping = TextWrapping.Wrap
             };
-            sp.Children.Add(titleText);
+            titleRow.Children.Add(titleText);
+            sp.Children.Add(titleRow);
 
-            TextBlock summaryText = new TextBlock
+            // 2. UNA LÍNEA CON EL BENEFICIO: el resumen técnico pasa a Detalles.
+            string headline = null;
+            if (t.ContainsKey("benefits") && t["benefits"] is IEnumerable)
+                foreach (object bObj in (IEnumerable)t["benefits"]) { headline = Convert.ToString(bObj); if (!string.IsNullOrEmpty(headline)) break; }
+            if (string.IsNullOrEmpty(headline)) headline = summary;
+            sp.Children.Add(new TextBlock
             {
-                Text = summary,
+                Text = headline,
                 Foreground = TextSecondary,
-                FontSize = 11.8,
+                FontSize = 12.5,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 4)
-            };
-            sp.Children.Add(summaryText);
+                Margin = new Thickness(0, 0, 0, 6)
+            });
 
-            // 3. CAJÓN DESPLEGABLE TÉCNICO (DRAWER)
+            // 3. ETIQUETAS SOLO SI HAY ALGO QUE AVISAR (precaución, reinicio).
+            string cautionText = (affects ?? "") + " " + (warning ?? "");
+            WrapPanel chips = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+            if ((risk == "medium" || risk == "high") && string.IsNullOrEmpty(warning))
+            {
+                Border riskChip = CreateBadge(risk == "high" ? "⚠ Riesgo alto" : "⚠ Precaución", risk);
+                riskChip.ToolTip = string.IsNullOrWhiteSpace(cautionText) ? riskLabel : cautionText.Trim();
+                riskChip.Margin = new Thickness(0, 0, 6, 2);
+                chips.Children.Add(riskChip);
+            }
+            if (cautionText.IndexOf("reinici", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Border restartChip = CreateBadge("↻ Requiere reiniciar", "medium");
+                restartChip.Margin = new Thickness(0, 0, 6, 2);
+                chips.Children.Add(restartChip);
+            }
+            if (chips.Children.Count > 0) sp.Children.Add(chips);
+
+            // 4. CAJÓN DESPLEGABLE TÉCNICO (DRAWER)
             Button toggleDrawerBtn = new Button
             {
-                Content = "Ver efecto y reversión ▾",
+                Content = "Detalles ▾",
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
                 Padding = new Thickness(0, 6, 4, 6),
                 Foreground = CyberCyanBrush,
-                FontSize = 11,
+                FontSize = 11.5,
                 FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 2, 0, 4)
+                Cursor = Cursors.Hand
             };
-            sp.Children.Add(toggleDrawerBtn);
+            System.Windows.Automation.AutomationProperties.SetName(toggleDrawerBtn, "Detalles de " + shortTitle);
+            toggleDrawerBtn.SetResourceReference(FrameworkElement.StyleProperty, "FlatButton");
 
             StackPanel drawerPanel = new StackPanel
             {
                 Visibility = Visibility.Collapsed,
                 Margin = new Thickness(0, 4, 0, 6)
             };
+
+            drawerPanel.Children.Add(new TextBlock
+            {
+                Text = summary,
+                Foreground = TextPrimary,
+                FontSize = 11.8,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
 
             // Descripción completa
             drawerPanel.Children.Add(new TextBlock
@@ -3802,8 +4053,12 @@ namespace Blackwall
                     FontSize = 11,
                     TextWrapping = TextWrapping.Wrap
                 };
-                sp.Children.Add(warnBox);
+                sp.Children.Add(warnBox); // safety contract: a risk warning is never hidden behind Detalles
             }
+            if (!string.IsNullOrEmpty(affects))
+                drawerPanel.Children.Add(new TextBlock { Text = "Afecta: " + affects, Foreground = RiskMedText, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+            if (!string.IsNullOrEmpty(subcat))
+                drawerPanel.Children.Add(new TextBlock { Text = "Categoría: " + subcat, Foreground = TextSecondary, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
 
             // ID del tweak y tags
             Border idBadge = new Border
@@ -3828,7 +4083,8 @@ namespace Blackwall
             toggleDrawerBtn.Click += (s, e) =>
             {
                 detailsOpen = !detailsOpen;
-                toggleDrawerBtn.Content = detailsOpen ? "Ocultar detalles ▴" : "Ver efecto y reversión ▾";
+                if (detailsOpen) AdaptiveCardGrid.SetExpanded(card, true);
+                toggleDrawerBtn.Content = detailsOpen ? "Ocultar detalles ▴" : "Detalles ▾";
                 drawerPanel.BeginAnimation(FrameworkElement.HeightProperty, null);
                 drawerPanel.Height = double.NaN;
                 if (detailsOpen)
@@ -3840,10 +4096,10 @@ namespace Blackwall
                 else if (MotionAllowed)
                 {
                     var close = new DoubleAnimation(drawerPanel.ActualHeight, 0, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop };
-                    close.Completed += (sender, args) => { if (!detailsOpen) drawerPanel.Visibility = Visibility.Collapsed; };
+                    close.Completed += (sender, args) => { if (!detailsOpen) { drawerPanel.Visibility = Visibility.Collapsed; AdaptiveCardGrid.SetExpanded(card, false); } };
                     drawerPanel.BeginAnimation(FrameworkElement.HeightProperty, close);
                 }
-                else drawerPanel.Visibility = Visibility.Collapsed;
+                else { drawerPanel.Visibility = Visibility.Collapsed; AdaptiveCardGrid.SetExpanded(card, false); }
             };
 
             // 4. PIE DE TARJETA: Estado actual + botón Undo si activo
@@ -3854,15 +4110,18 @@ namespace Blackwall
                 Text = !stateKnown ? "Pendiente de verificar" : isApplied ? "Detectado como activo" : "No detectado como activo",
                 ToolTip = "La detección usa los criterios del catálogo; no demuestra que todas las operaciones se hayan aplicado ni que se conserve tu configuración original.",
                 Foreground = isApplied ? RiskLowText : TextSecondary,
-                FontWeight = FontWeights.Bold,
-                FontSize = 11.5,
+                FontWeight = isApplied ? FontWeights.Bold : FontWeights.Normal,
+                FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center
             };
             if (_tweakActionErrors.ContainsKey(id)) { statusText.Text = "No se completó: " + _tweakActionErrors[id]; statusText.Foreground = RiskHighText; }
             DockPanel.SetDock(switchButton, Dock.Right);
-            switchButton.Margin = new Thickness(12, 0, 0, 0);
+            switchButton.Margin = new Thickness(10, 0, 0, 0);
             footer.Children.Add(switchButton);
+            DockPanel.SetDock(toggleDrawerBtn, Dock.Left);
+            footer.Children.Add(toggleDrawerBtn);
             footer.Children.Add(statusText);
             Grid cardLayout = new Grid();
             cardLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -3883,6 +4142,7 @@ namespace Blackwall
                 AnimateEntrance(statusText, 2, 180);
                 statusText.Text = applied ? "Detectado como activo" : "No detectado como activo";
                 statusText.Foreground = applied ? RiskLowText : TextSecondary;
+                statusText.FontWeight = applied ? FontWeights.Bold : FontWeights.Normal;
             };
             _tweakCardUpdaters[id] = updateCardUi;
 
@@ -4280,138 +4540,213 @@ namespace Blackwall
         // --------------------------------------------------------------------
         // MÓDULO D: MONITOR DE SCRIPTS EN VIVO
         // --------------------------------------------------------------------
+        private DockPanel CardTitle(string glyph, string text, UIElement right = null)
+        {
+            var line = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
+            if (right != null) { DockPanel.SetDock(right, Dock.Right); line.Children.Add(right); }
+            var title = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            title.Children.Add(new TextBlock { Text = glyph, FontFamily = NavIconFont, FontSize = 16, Foreground = CyberCyanBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+            title.Children.Add(new TextBlock { Text = text, Foreground = TextPrimary, FontSize = 15, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            line.Children.Add(title);
+            return line;
+        }
+
         private UIElement BuildMonitorView()
         {
             _monitorProcessMemoryLabels.Clear();
             StackPanel root = new StackPanel();
 
-            Button refreshBtn = CreateStyledButton("Actualizar procesos", true);
-            refreshBtn.Click += async (s, e) => await RefreshLiveScriptsNativeAsync();
+            // 1. CABECERA COMPACTA
+            Border head = CreateCardContainer();
+            head.Margin = new Thickness(0, 0, 0, 14);
+            head.Padding = new Thickness(20, 16, 20, 16);
+            var headStack = new StackPanel();
+            headStack.Children.Add(new TextBlock { Text = "Actividad", Foreground = TextPrimary, FontSize = 22, FontWeight = FontWeights.SemiBold });
+            _activitySummary = new TextBlock { Foreground = TextSecondary, FontSize = 12.5, Margin = new Thickness(0, 6, 0, 0) };
+            headStack.Children.Add(_activitySummary);
+            head.Child = headStack;
+            root.Children.Add(head);
 
-            root.Children.Add(CreateBanner(
-                "Monitor de procesos",
-                "Detecta en tiempo real powershell.exe, pwsh.exe, cmd.exe, wscript.exe, cscript.exe y mshta.exe mediante consulta WMI nativa.",
-                refreshBtn
-            ));
+            // 2. OPERACIONES
+            Border opsCard = CreateCardContainer();
+            opsCard.Margin = new Thickness(0, 0, 0, 14);
+            var opsStack = new StackPanel();
+            opsStack.Children.Add(CardTitle("", "Operaciones"));
+            _activityOpsPanel = new StackPanel();
+            opsStack.Children.Add(_activityOpsPanel);
+            opsCard.Child = opsStack;
+            root.Children.Add(opsCard);
+            RefreshActivityUi();
 
-            Border consoleCard = CreateCardContainer();
-            consoleCard.Margin = new Thickness(0, 0, 0, 14);
-            StackPanel consoleStack = new StackPanel();
-            consoleStack.Children.Add(new TextBlock
+            // 3. REGISTRO
+            Border logCard = CreateCardContainer();
+            logCard.Margin = new Thickness(0, 0, 0, 14);
+            var logStack = new StackPanel();
+            var logActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            Button copyBtn = CreateLinkButton("Copiar");
+            copyBtn.Click += (s, e) => { try { Clipboard.SetText(ActivityLogText()); SetStatus("Registro copiado al portapapeles", "Listo"); } catch (Exception ex) { AppendLog("No se pudo copiar el registro: " + ex.Message, "warn", "Sistema"); } };
+            Button exportBtn = CreateLinkButton("Exportar .log");
+            exportBtn.Click += (s, e) =>
             {
-                Text = "💻 1. Cola y Consola Interna de Ejecución de Blackwall",
-                Foreground = TextPrimary,
-                FontWeight = FontWeights.Bold,
-                FontSize = 14,
-                Margin = new Thickness(0, 0, 0, 8)
-            });
-
-            _liveConsoleTextBox = new TextBox
-            {
-                Text = string.Join("\r\n", _consoleLogs),
-                Background = BgApp,
-                Foreground = TextPrimary,
-                BorderBrush = BorderSubtle,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                Height = 200,
-                IsReadOnly = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Padding = new Thickness(10)
+                var dialog = new SaveFileDialog { FileName = "Blackwall-actividad-" + DateTime.Now.ToString("yyyyMMdd-HHmm") + ".log", Filter = "Registro (*.log)|*.log|Texto (*.txt)|*.txt" };
+                if (dialog.ShowDialog(this) != true) return;
+                try { File.WriteAllText(dialog.FileName, ActivityLogText(), new UTF8Encoding(false)); AppendLog("Registro exportado en " + dialog.FileName, "info", "Sistema"); }
+                catch (Exception ex) { AppendLog("No se pudo exportar el registro: " + ex.Message, "error", "Sistema"); }
             };
-            _liveConsoleTextBox.ScrollToEnd();
-            consoleStack.Children.Add(_liveConsoleTextBox);
-            consoleCard.Child = consoleStack;
-            root.Children.Add(consoleCard);
+            Button clearBtn = CreateLinkButton("Limpiar");
+            clearBtn.Click += (s, e) => { _activityLog.Clear(); RefreshLogRows(); };
+            foreach (var b in new[] { copyBtn, exportBtn, clearBtn }) { b.Margin = new Thickness(8, 0, 0, 0); logActions.Children.Add(b); }
+            logStack.Children.Add(CardTitle("", "Registro", logActions));
 
+            var filters = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
+            foreach (var option in new[] { new[] { "all", "Todo" }, new[] { "problems", "Errores y avisos" }, new[] { "Optimización", "Optimizaciones" }, new[] { "Instalación", "Instalaciones" }, new[] { "Sistema", "Sistema" }, new[] { "Seguridad", "Seguridad" } })
+            {
+                string key = option[0];
+                AddFilterButton(filters, option[1], _activityFilter == key, () => { _activityFilter = key; RenderCurrentTab(); });
+            }
+            logStack.Children.Add(filters);
+
+            var logSurface = new Border { Background = BgApp, BorderBrush = BorderSubtle, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 12, 6, 12) };
+            var logGrid = new Grid();
+            // Virtualized: only the ~15 visible lines are laid out and drawn, however long the log is.
+            _activityLogRows = (ItemsControl)System.Windows.Markup.XamlReader.Parse(@"
+                <ItemsControl xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+                    Height='320' VirtualizingStackPanel.IsVirtualizing='True' VirtualizingStackPanel.VirtualizationMode='Recycling' ScrollViewer.CanContentScroll='True'>
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel Margin='0,0,8,0'/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.Template><ControlTemplate TargetType='ItemsControl'>
+                        <ScrollViewer x:Name='Scroll' Background='Transparent' PanningMode='VerticalOnly' CanContentScroll='True' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'><ItemsPresenter/></ScrollViewer>
+                    </ControlTemplate></ItemsControl.Template>
+                    <ItemsControl.ItemTemplate><DataTemplate>
+                        <TextBlock TextWrapping='Wrap' FontSize='12.5' Margin='0,0,0,5' Foreground='{Binding Text}'><Run Text='{Binding Time, Mode=OneWay}' FontFamily='Consolas' FontSize='11.5' Foreground='{Binding Muted}'/><Run Text='   •  ' FontWeight='Bold' FontSize='14' Foreground='{Binding Dot}'/><Run Text='{Binding Source, Mode=OneWay}' FontWeight='SemiBold' FontSize='11.5' Foreground='{Binding Muted}'/><Run Text='   '/><Run Text='{Binding Message, Mode=OneWay}'/></TextBlock>
+                    </DataTemplate></ItemsControl.ItemTemplate>
+                </ItemsControl>");
+            _activityLogRows.ItemsSource = _activityRows;
+            _activityLogRows.ApplyTemplate();
+            _activityLogScroll = (ScrollViewer)_activityLogRows.Template.FindName("Scroll", _activityLogRows);
+            _activityLogScroll.PreviewMouseWheel += ChainWheelToPage;
+            _activityLogEmpty = new TextBlock { Text = "Sin entradas para este filtro.", Foreground = TextSecondary, FontSize = 12.5, Margin = new Thickness(0, 4, 0, 0), IsHitTestVisible = false };
+            logGrid.Children.Add(_activityLogRows);
+            logGrid.Children.Add(_activityLogEmpty);
+            logSurface.Child = logGrid;
+            logStack.Children.Add(logSurface);
+            logCard.Child = logStack;
+            root.Children.Add(logCard);
+            RefreshLogRows();
+
+            // 4. SCRIPTS EN SEGUNDO PLANO
             Border scriptsCard = CreateCardContainer();
-            StackPanel scriptsStack = new StackPanel();
-            scriptsStack.Children.Add(new TextBlock
-            {
-                Text = "🕵️ 2. Motores de Scripts Activos en Windows (" + _liveScripts.Count + " Procesos Detectados)",
-                Foreground = TextPrimary,
-                FontWeight = FontWeights.Bold,
-                FontSize = 14,
-                Margin = new Thickness(0, 0, 0, 10)
-            });
-
-            if (_liveScripts.Count == 0)
-            {
-                scriptsStack.Children.Add(new TextBlock
-                {
-                    Text = "No hay otros scripts externos ejecutándose en segundo plano en este momento.",
-                    Foreground = TextSecondary,
-                    FontSize = 12.5
-                });
-            }
-            else
-            {
-                foreach (var p in _liveScripts)
-                {
-                    int pid = GetInt(p, "pid");
-                    Border pRow = new Border
-                    {
-                        Background = BgApp,
-                        BorderBrush = BorderSubtle,
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(8),
-                        Padding = new Thickness(12, 10, 12, 10),
-                        Margin = new Thickness(0, 0, 0, 8)
-                    };
-                    DockPanel dp = new DockPanel();
-                    Button killBtn = CreateStyledButton("🛑 Terminar (Kill PID " + pid + ")", false);
-                    killBtn.Foreground = RiskHighText;
-                    killBtn.BorderBrush = RiskHighText;
-                    killBtn.VerticalAlignment = VerticalAlignment.Top;
-                    killBtn.Click += async (s, e) =>
-                    {
-                        try
-                        {
-                            Process targetProc = Process.GetProcessById(pid);
-                            targetProc.Kill();
-                            AppendLog("Proceso PID " + pid + " terminado nativamente.", "KILL");
-                        }
-                        catch (Exception ex)
-                        {
-                            AppendLog("No se pudo terminar PID " + pid + ": " + ex.Message, "WARN");
-                        }
-                        await RefreshLiveScriptsNativeAsync();
-                    };
-                    DockPanel.SetDock(killBtn, Dock.Right);
-                    dp.Children.Add(killBtn);
-
-                    StackPanel info = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
-                    TextBlock memoryLabel = new TextBlock
-                    {
-                        Text = "PID " + pid + "  •  " + GetStr(p, "name") + "  •  Parent PID: " + GetStr(p, "parentPid") + "  •  RAM: " + GetStr(p, "memoryMb") + " MB",
-                        Foreground = TextPrimary,
-                        FontWeight = FontWeights.Bold,
-                        FontSize = 12.8
-                    };
-                    _monitorProcessMemoryLabels[pid] = memoryLabel;
-                    info.Children.Add(memoryLabel);
-                    info.Children.Add(new TextBox
-                    {
-                        Text = GetStr(p, "commandLine"),
-                        Background = Brushes.Transparent,
-                        Foreground = CyberCyanBrush,
-                        BorderThickness = new Thickness(0),
-                        IsReadOnly = true,
-                        TextWrapping = TextWrapping.Wrap,
-                        FontFamily = new FontFamily("Consolas"),
-                        FontSize = 11.8,
-                        Margin = new Thickness(0, 3, 0, 0)
-                    });
-                    dp.Children.Add(info);
-                    pRow.Child = dp;
-                    scriptsStack.Children.Add(pRow);
-                }
-            }
-
+            var scriptsStack = new StackPanel();
+            Button refreshBtn = CreateLinkButton("↻ Actualizar");
+            refreshBtn.Click += async (s, e) => await RefreshLiveScriptsNativeAsync();
+            var titleLine = CardTitle("", "Scripts en segundo plano", refreshBtn);
+            _monitorProcessTitle = (TextBlock)((StackPanel)titleLine.Children[titleLine.Children.Count - 1]).Children[1];
+            scriptsStack.Children.Add(titleLine);
+            scriptsStack.Children.Add(new TextBlock { Text = "PowerShell, cmd y Windows Script Host abiertos por cualquier programa. Se actualiza cada 3 s mientras esta pantalla está abierta.", Foreground = TextSecondary, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, -6, 0, 12) });
+            _monitorProcessPanel = new StackPanel();
+            scriptsStack.Children.Add(_monitorProcessPanel);
             scriptsCard.Child = scriptsStack;
             root.Children.Add(scriptsCard);
+            RebuildProcessList();
             return root;
+        }
+
+        // Scroll chaining: at its top or bottom the log hands the wheel/touchpad to the page instead of swallowing it.
+        private void ChainWheelToPage(object sender, MouseWheelEventArgs e)
+        {
+            var inner = (ScrollViewer)sender;
+            bool atLimit = e.Delta < 0 ? inner.VerticalOffset >= inner.ScrollableHeight - 0.5 : inner.VerticalOffset <= 0.5;
+            if (!atLimit) return;
+            e.Handled = true;
+            // Re-raise above the log list so it bubbles straight to the page's smooth scroller.
+            var outside = _activityLogRows == null ? null : VisualTreeHelper.GetParent(_activityLogRows) as UIElement;
+            if (outside != null) outside.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta) { RoutedEvent = UIElement.MouseWheelEvent, Source = inner });
+        }
+
+        private void RebuildProcessList()
+        {
+            if (_monitorProcessPanel == null) return;
+            _monitorProcessPanel.Children.Clear();
+            _monitorProcessMemoryLabels.Clear();
+            if (_monitorProcessTitle != null) _monitorProcessTitle.Text = "Scripts en segundo plano · " + _liveScripts.Count;
+            if (_liveScripts.Count == 0)
+            {
+                _monitorProcessPanel.Children.Add(new TextBlock { Text = "No hay scripts ejecutándose en segundo plano.", Foreground = TextSecondary, FontSize = 12.5 });
+                return;
+            }
+            foreach (var p in _liveScripts) _monitorProcessPanel.Children.Add(BuildProcessRow(p));
+        }
+
+        private UIElement BuildProcessRow(Dictionary<string, object> p)
+        {
+            int pid = GetInt(p, "pid");
+            string name = GetStr(p, "name");
+            string lower = name.ToLowerInvariant();
+            string glyph = lower.Contains("powershell") || lower.Contains("pwsh") ? "" : lower == "cmd.exe" ? "" : "";
+            var row = new Border { Background = BgApp, BorderBrush = BorderSubtle, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 10, 12, 10), Margin = new Thickness(0, 0, 0, 8) };
+            var stack = new StackPanel();
+            var line = new DockPanel();
+
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            Button endBtn = CreateStyledButton("Terminar", false);
+            endBtn.Padding = new Thickness(14, 4, 14, 4);
+            System.Windows.Automation.AutomationProperties.SetName(endBtn, "Terminar " + name + " PID " + pid);
+            actions.Children.Add(endBtn);
+            DockPanel.SetDock(actions, Dock.Right);
+            line.Children.Add(actions);
+
+            var identity = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            identity.Children.Add(new TextBlock { Text = glyph, FontFamily = NavIconFont, FontSize = 15, Foreground = TextSecondary, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+            identity.Children.Add(new TextBlock { Text = name, Foreground = TextPrimary, FontSize = 13.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) });
+            var meta = new TextBlock { Text = ProcessMetaText(p), Foreground = TextSecondary, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            _monitorProcessMemoryLabels[pid] = meta;
+            identity.Children.Add(meta);
+            line.Children.Add(identity);
+            stack.Children.Add(line);
+
+            string command = GetStr(p, "commandLine");
+            var commandText = new TextBlock { Text = command, Foreground = TextSecondary, FontFamily = new FontFamily("Consolas"), FontSize = 11.5, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(25, 6, 0, 0), ToolTip = command };
+            stack.Children.Add(commandText);
+            Button expand = CreateLinkButton("Ver comando");
+            expand.HorizontalAlignment = HorizontalAlignment.Left;
+            expand.Margin = new Thickness(21, 2, 0, 0);
+            expand.FontSize = 11.5;
+            expand.Click += (s, e) =>
+            {
+                bool open = commandText.TextWrapping == TextWrapping.NoWrap;
+                commandText.TextWrapping = open ? TextWrapping.Wrap : TextWrapping.NoWrap;
+                commandText.TextTrimming = open ? TextTrimming.None : TextTrimming.CharacterEllipsis;
+                expand.Content = open ? "Ocultar comando" : "Ver comando";
+            };
+            stack.Children.Add(expand);
+
+            // Killing a process can close the app that owns it: confirm inline before doing it.
+            var confirm = new Border { Background = RiskHighBg, CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 8, 12, 8), Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
+            var confirmLine = new DockPanel();
+            var confirmButtons = new StackPanel { Orientation = Orientation.Horizontal };
+            Button yes = CreateStyledButton("Terminar", true);
+            yes.Padding = new Thickness(14, 4, 14, 4);
+            yes.Margin = new Thickness(8, 0, 0, 0);
+            Button no = CreateLinkButton("Cancelar");
+            no.Margin = new Thickness(8, 0, 0, 0);
+            confirmButtons.Children.Add(no);
+            confirmButtons.Children.Add(yes);
+            DockPanel.SetDock(confirmButtons, Dock.Right);
+            confirmLine.Children.Add(confirmButtons);
+            confirmLine.Children.Add(new TextBlock { Text = "¿Terminar " + name + " (PID " + pid + ")? Puede cerrar el programa que lo abrió.", Foreground = RiskHighText, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center });
+            confirm.Child = confirmLine;
+            stack.Children.Add(confirm);
+            endBtn.Click += (s, e) => { confirm.Visibility = Visibility.Visible; endBtn.IsEnabled = false; no.Focus(); };
+            no.Click += (s, e) => { confirm.Visibility = Visibility.Collapsed; endBtn.IsEnabled = true; endBtn.Focus(); };
+            yes.Click += async (s, e) =>
+            {
+                yes.IsEnabled = false;
+                try { Process.GetProcessById(pid).Kill(); AppendLog(name + " (PID " + pid + ") terminado.", "info", "Procesos"); }
+                catch (Exception ex) { AppendLog("No se pudo terminar " + name + " (PID " + pid + "): " + ex.Message, "warn", "Procesos"); }
+                await RefreshLiveScriptsNativeAsync();
+            };
+
+            row.Child = stack;
+            return row;
         }
 
         // --------------------------------------------------------------------
@@ -4467,9 +4802,8 @@ namespace Blackwall
             sfcBtn.Click += async (s, e) =>
             {
                 SetStatus("🔍 Ejecutando SFC...", "sfc.exe /verifyonly");
-                string o = await Task.Run(() => RunSystemToolDirect("sfc.exe", "/verifyonly"));
-                AppendLog(o, "SFC");
-                SetStatus("🟢 Verificación SFC finalizada", "Listo");
+                if (await RunOperationAsync("Verificar archivos de Windows (SFC)", "Sistema", op => Task.Run(() => { StepOperation(op, "sfc.exe /verifyonly · puede tardar varios minutos"); return "SFC: " + LastMeaningfulLines(RunSystemToolDirect("sfc.exe", "/verifyonly"), 2); })))
+                    SetStatus("🟢 Verificación SFC finalizada", "Listo");
             };
             repBtns.Children.Add(sfcBtn);
 
@@ -4478,19 +4812,17 @@ namespace Blackwall
             dismBtn.Click += async (s, e) =>
             {
                 SetStatus("🩺 Ejecutando DISM...", "DISM.exe /CheckHealth");
-                string o = await Task.Run(() => RunSystemToolDirect("DISM.exe", "/Online /Cleanup-Image /CheckHealth"));
-                AppendLog(o, "DISM");
-                SetStatus("🟢 Diagnóstico DISM finalizado", "Listo");
+                if (await RunOperationAsync("Comprobar la imagen de Windows (DISM)", "Sistema", op => Task.Run(() => { StepOperation(op, "DISM /Online /Cleanup-Image /CheckHealth"); return "DISM: " + LastMeaningfulLines(RunSystemToolDirect("DISM.exe", "/Online /Cleanup-Image /CheckHealth"), 2); })))
+                    SetStatus("🟢 Diagnóstico DISM finalizado", "Listo");
             };
             repBtns.Children.Add(dismBtn);
 
-            Button dnsBtn = CreateStyledButton("🌐 Flush DNS & Winsock", false);
+            Button dnsBtn = CreateStyledButton("🌐 Limpiar caché DNS", false);
             dnsBtn.Margin = new Thickness(0, 0, 8, 8);
             dnsBtn.Click += async (s, e) =>
             {
-                string o = await Task.Run(() => RunSystemToolDirect("ipconfig.exe", "/flushdns"));
-                AppendLog(o, "NET");
-                SetStatus("🟢 Caché DNS limpiada", "Listo");
+                if (await RunOperationAsync("Limpiar la caché DNS", "Sistema", op => Task.Run(() => { StepOperation(op, "ipconfig /flushdns"); return "DNS: " + LastMeaningfulLines(RunSystemToolDirect("ipconfig.exe", "/flushdns"), 1); })))
+                    SetStatus("🟢 Caché DNS limpiada", "Listo");
             };
             repBtns.Children.Add(dnsBtn);
 
@@ -4500,9 +4832,14 @@ namespace Blackwall
             {
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 string outFile = Path.Combine(desktop, "Blackwall-Registry-Backup.reg");
-                await Task.Run(() => RunSystemToolDirect("reg.exe", "export \"HKCU\\Control Panel\\Desktop\" \"" + outFile + "\" /y"));
-                AppendLog("Backup exportado en: " + outFile, "BACKUP");
-                SetStatus("🟢 Backup .reg exportado al Escritorio", "Listo");
+                bool exported = await RunOperationAsync("Exportar copia del registro", "Seguridad", op => Task.Run(() =>
+                {
+                    int code;
+                    RunSystemToolDirect("reg.exe", "export \"HKCU\\Control Panel\\Desktop\" \"" + outFile + "\" /y", out code);
+                    if (code != 0) throw new InvalidOperationException("reg.exe devolvió el código " + code);
+                    return "Copia exportada en " + outFile;
+                }));
+                if (exported) SetStatus("🟢 Backup .reg exportado al Escritorio", "Listo");
             };
             repBtns.Children.Add(regBtn);
 
@@ -4553,14 +4890,8 @@ namespace Blackwall
         private async Task ApplyRecommendedSafeProfileAsync(string scope)
         {
             await CreateRestorePointNowAsync();
-            foreach (var t in _tweaks)
-            {
-                if (GetStr(t, "riskLevel") == "low" && ListContains(t, "deviceScope", scope))
-                {
-                    await ExecuteTweakAsync(t, true);
-                }
-            }
-            SetStatus("🟢 Perfil Seguro (" + scope.ToUpperInvariant() + ") aplicado", "Completado");
+            await ApplyTweakBatchAsync(_tweaks.Where(t => GetStr(t, "riskLevel") == "low" && ListContains(t, "deviceScope", scope)).ToList(), "Perfil recomendado");
+            await RefreshTweaksStateNativeAsync();
         }
 
         // ====================================================================
@@ -4942,18 +5273,206 @@ namespace Blackwall
             parent.Children.Add(b);
         }
 
+        // Legacy tags → level and source, so existing AppendLog(msg, TAG) calls keep working unchanged.
+        private static readonly Dictionary<string, string[]> LogTags = new Dictionary<string, string[]>
+        {
+            { "ERROR", new[] { "error", "Sistema" } }, { "WARN", new[] { "warn", "Sistema" } },
+            { "TWEAK", new[] { "info", "Optimización" } }, { "PACK", new[] { "info", "Optimización" } },
+            { "INSTALL", new[] { "info", "Instalación" } }, { "WINGET", new[] { "info", "Instalación" } }, { "DOWNLOAD", new[] { "info", "Instalación" } },
+            { "FALLBACK", new[] { "warn", "Instalación" } }, { "SUCCESS", new[] { "success", "Instalación" } },
+            { "SAFETY", new[] { "info", "Seguridad" } }, { "BACKUP", new[] { "info", "Seguridad" } },
+            { "OTA", new[] { "info", "Actualizaciones" } }, { "KILL", new[] { "info", "Procesos" } }
+        };
+
         private void AppendLog(string msg, string tag)
         {
-            Dispatcher.Invoke(() =>
+            string[] map;
+            if (!LogTags.TryGetValue(tag ?? "", out map)) map = new[] { "info", "Sistema" };
+            AppendLog(msg, map[0], map[1]);
+        }
+
+        private void AppendLog(string msg, string level, string source)
+        {
+            var entry = new ActivityLogEntry { Time = DateTime.Now, Level = level, Source = source, Message = (msg ?? "").Replace("\0", "").Trim() };
+            if (entry.Message.Length == 0) return;
+            RunOnUi(() =>
             {
-                string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] [" + tag + "] " + msg;
-                _consoleLogs.Add(line);
-                if (_liveConsoleTextBox != null)
-                {
-                    _liveConsoleTextBox.AppendText((_liveConsoleTextBox.Text.Length == 0 ? "" : "\r\n") + line);
-                    _liveConsoleTextBox.ScrollToEnd();
-                }
+                _activityLog.Add(entry);
+                if (_activityLog.Count > ActivityLogLimit) _activityLog.RemoveRange(0, _activityLog.Count - ActivityLogLimit);
+                AppendLogRow(entry);
             });
+        }
+
+        // Background work never waits for the UI: updates are queued in order on the dispatcher.
+        private void RunOnUi(Action action)
+        {
+            if (Dispatcher.CheckAccess()) action(); else Dispatcher.BeginInvoke(action);
+        }
+
+        private bool LogMatches(ActivityLogEntry entry)
+        {
+            if (_activityFilter == "all") return true;
+            if (_activityFilter == "problems") return entry.Level == "error" || entry.Level == "warn";
+            return entry.Source == _activityFilter;
+        }
+
+        private SolidColorBrush LevelBrush(string level)
+        {
+            return level == "error" ? RiskHighText : level == "warn" ? RiskMedText : level == "success" ? RiskLowText : TextSecondary;
+        }
+
+        private readonly System.Collections.ObjectModel.ObservableCollection<ActivityLogRow> _activityRows = new System.Collections.ObjectModel.ObservableCollection<ActivityLogRow>();
+        private readonly List<ActivityLogEntry> _pendingLogRows = new List<ActivityLogEntry>();
+        private bool _logFlushQueued;
+
+        private ActivityLogRow BuildLogRow(ActivityLogEntry entry)
+        {
+            return new ActivityLogRow { Time = entry.Time.ToString("HH:mm:ss"), Source = entry.Source, Message = entry.Message, Dot = LevelBrush(entry.Level), Text = entry.Level == "error" ? RiskHighText : TextPrimary, Muted = TextSecondary };
+        }
+
+        // Lines arriving in a burst are added in one pass per frame, with a single scroll to the end.
+        private void AppendLogRow(ActivityLogEntry entry)
+        {
+            if (_activityLogRows == null || !LogMatches(entry)) return;
+            _pendingLogRows.Add(entry);
+            if (_logFlushQueued) return;
+            _logFlushQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushLogRows));
+        }
+
+        private void FlushLogRows()
+        {
+            _logFlushQueued = false;
+            var batch = _pendingLogRows.Skip(Math.Max(0, _pendingLogRows.Count - ActivityRowLimit)).ToList();
+            _pendingLogRows.Clear();
+            if (_activityLogRows == null || batch.Count == 0) return;
+            bool following = _activityLogScroll == null || _activityLogScroll.VerticalOffset >= _activityLogScroll.ScrollableHeight - 1;
+            int overflow = _activityRows.Count + batch.Count - ActivityRowLimit;
+            for (int i = 0; i < overflow && _activityRows.Count > 0; i++) _activityRows.RemoveAt(0);
+            foreach (var entry in batch) _activityRows.Add(BuildLogRow(entry));
+            if (_activityLogEmpty != null) _activityLogEmpty.Visibility = Visibility.Collapsed;
+            if (following && _activityLogScroll != null) _activityLogScroll.ScrollToEnd();
+        }
+
+        private void RefreshLogRows()
+        {
+            if (_activityLogRows == null) return;
+            _pendingLogRows.Clear();
+            _activityRows.Clear();
+            var visible = _activityLog.Where(LogMatches).ToList();
+            foreach (var entry in visible.Skip(Math.Max(0, visible.Count - ActivityRowLimit))) _activityRows.Add(BuildLogRow(entry));
+            if (_activityLogEmpty != null) _activityLogEmpty.Visibility = _activityRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (_activityLogScroll != null) _activityLogScroll.ScrollToEnd();
+        }
+
+        private string ActivityLogText()
+        {
+            return string.Join("\r\n", _activityLog.Where(LogMatches).Select(e => e.Time.ToString("yyyy-MM-dd HH:mm:ss") + "  " + e.Level.ToUpperInvariant().PadRight(7) + "  " + e.Source.PadRight(15) + "  " + e.Message));
+        }
+
+        internal ActivityOperation BeginOperation(string title, string source, int steps)
+        {
+            var op = new ActivityOperation { Title = title, Source = source, Steps = Math.Max(0, steps) };
+            RunOnUi(() => { _operations.Add(op); TrimOperations(); QueueActivityRefresh(); });
+            AppendLog(title, "info", source);
+            return op;
+        }
+
+        internal void StepOperation(ActivityOperation op, string text, bool advance = true, bool log = true)
+        {
+            RunOnUi(() => { op.Step = text; if (advance && op.Steps > 0) op.Done = Math.Min(op.Steps, op.Done + 1); QueueActivityRefresh(); });
+            if (log) AppendLog(text, "info", op.Source);
+        }
+
+        internal void CompleteOperation(ActivityOperation op, bool ok, string summary)
+        {
+            RunOnUi(() =>
+            {
+                if (op.Finished) return;
+                op.Finished = true; op.Ok = ok; op.Summary = summary; op.Ended = DateTime.Now;
+                if (ok && op.Steps > 0) op.Done = op.Steps;
+                if (ok) _operationsCompleted++; else _operationsFailed++;
+                TrimOperations();
+                QueueActivityRefresh();
+            });
+            AppendLog(summary, ok ? "success" : "error", op.Source);
+        }
+
+        // Wraps a one-shot system task (SFC, DISM, upgrades...) so it always ends as completed or failed; never throws to a click handler.
+        private async Task<bool> RunOperationAsync(string title, string source, Func<ActivityOperation, Task<string>> work)
+        {
+            var op = BeginOperation(title, source, 0);
+            try { CompleteOperation(op, true, await work(op) ?? title + ": finalizado"); return true; }
+            catch (Exception ex) { CompleteOperation(op, false, title + ": " + ex.Message); SetStatus("No se completó: " + title, "Consulta el registro de actividad"); return false; }
+        }
+
+        // Console tools print spinners and progress bars; the log keeps only their last meaningful lines.
+        private static string LastMeaningfulLines(string output, int count)
+        {
+            var lines = (output ?? "").Replace("\0", "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim()).Where(l => l.Length > 2 && l.Any(char.IsLetterOrDigit) && !l.All(c => "-\\|/█▒░ %0123456789.".IndexOf(c) >= 0)).ToList();
+            return string.Join(" · ", lines.Skip(Math.Max(0, lines.Count - count)));
+        }
+
+        private void TrimOperations()
+        {
+            var finished = _operations.Where(o => o.Finished).ToList();
+            foreach (var old in finished.Take(Math.Max(0, finished.Count - 5))) _operations.Remove(old);
+        }
+
+        private void QueueActivityRefresh()
+        {
+            if (_activityRefreshQueued) return;
+            _activityRefreshQueued = true; // many steps in one frame collapse into a single UI update
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(RefreshActivityUi));
+        }
+
+        private void RefreshActivityUi()
+        {
+            _activityRefreshQueued = false;
+            var active = _operations.LastOrDefault(o => !o.Finished);
+            if (_footerProgress != null)
+            {
+                _footerProgress.Visibility = active == null ? Visibility.Collapsed : Visibility.Visible;
+                if (active != null)
+                {
+                    _footerProgress.IsIndeterminate = active.Steps == 0;
+                    _footerProgress.Value = active.Steps == 0 ? 0 : active.Done * 100.0 / active.Steps;
+                    if (_taskText != null) _taskText.Text = active.Title + (active.Steps > 0 ? " · " + active.Done + "/" + active.Steps : "");
+                }
+                else if (_taskText != null && _operations.Count > 0) _taskText.Text = _operations[_operations.Count - 1].Ok ? "Listo" : "Terminado con errores";
+            }
+            if (_activitySummary != null)
+                _activitySummary.Text = "En curso " + _operations.Count(o => !o.Finished) + "  ·  Completadas " + _operationsCompleted + "  ·  Con errores " + _operationsFailed;
+            if (_activityOpsPanel == null) return;
+            _activityOpsPanel.Children.Clear();
+            if (_operations.Count == 0)
+            {
+                _activityOpsPanel.Children.Add(new TextBlock { Text = "No hay operaciones en curso. Lo que apliques o instales aparecerá aquí paso a paso.", Foreground = TextSecondary, FontSize = 12.5, TextWrapping = TextWrapping.Wrap });
+                return;
+            }
+            foreach (var op in Enumerable.Reverse(_operations).Take(6)) _activityOpsPanel.Children.Add(BuildOperationRow(op));
+        }
+
+        private UIElement BuildOperationRow(ActivityOperation op)
+        {
+            var row = new Border { BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 8, 0, 10) };
+            var stack = new StackPanel();
+            var head = new DockPanel();
+            string state = !op.Finished ? (op.Steps > 0 ? op.Done + " de " + op.Steps : "En curso")
+                : (op.Ok ? "✓ Completada" : "⚠ Con errores") + " · " + Math.Max(0.1, (op.Ended - op.Started).TotalSeconds).ToString("0.#") + " s";
+            var stateText = new TextBlock { Text = state, Foreground = !op.Finished ? CyberCyanBrush : op.Ok ? RiskLowText : RiskHighText, FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            DockPanel.SetDock(stateText, Dock.Right);
+            head.Children.Add(stateText);
+            head.Children.Add(new TextBlock { Text = op.Title, Foreground = TextPrimary, FontSize = 13.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 12, 0) });
+            stack.Children.Add(head);
+            string detail = op.Finished ? op.Summary : op.Step;
+            if (!string.IsNullOrEmpty(detail))
+                stack.Children.Add(new TextBlock { Text = op.Source + " · " + detail, Foreground = op.Finished && !op.Ok ? RiskHighText : TextSecondary, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) });
+            if (!op.Finished)
+                stack.Children.Add(new ProgressBar { Height = 4, Maximum = 100, Value = op.Steps == 0 ? 0 : op.Done * 100.0 / op.Steps, IsIndeterminate = op.Steps == 0, Foreground = CyberCyanBrush, Background = BgElevated, BorderThickness = new Thickness(0), Margin = new Thickness(0, 8, 0, 0) });
+            row.Child = stack;
+            return row;
         }
 
         private void SetStatus(string status, string task)
