@@ -75,9 +75,13 @@ Rangos de primer evento de render: 55,3–62,8 ms en 1.4.5 y 25,2–26,0 ms en 1
 
 El Blackwall.exe que ya tenía el usuario en el escritorio permanece intacto. La copia antigua no podrá detectar 1.4.6 en el canal público mientras no se publique la nueva release y se actualice el índice firmado.
 
-## Publicación pendiente
+## Publicación realizada
 
-Tras la confirmación del usuario: comprobar otra vez el estado local/remoto, crear un commit revisado y tag nuevo, publicar los assets inmutables con las notas preparadas, verificar su descarga pública y sólo después copiar el manifiesto firmado exacto a `catalogs/update.json` y subir ese índice a main. No recompilar ni editar el paquete firmado para publicarlo.
+El usuario autorizó la publicación. El código y el tag `v1.4.6` se publicaron en el commit `c1cc1c6`. La release incluye las notas de `RELEASE-NOTES-1.4.6.md` y los dos assets firmados; se verificaron sus tamaños y hashes tanto en la API de GitHub como mediante descarga pública.
+
+Después de verificar la descarga se publicó el manifiesto firmado exacto en `catalogs/update.json` mediante el commit `367db10`. Con el código OTA real del ejecutable 1.4.5 se consultó el canal público, se comprobó la firma y las notas de 1.4.6, y se descargó y verificó el ejecutable de 1 282 048 bytes. Esta comprobación no instaló la actualización.
+
+Release pública: https://github.com/DylanRico/BlackWallOptimizer/releases/tag/v1.4.6
 
 ## Límites
 
