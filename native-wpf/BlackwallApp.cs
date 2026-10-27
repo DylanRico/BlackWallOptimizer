@@ -499,10 +499,12 @@ namespace Blackwall
             LoadUiPreferences();
             bool isAdmin = IsAdministrator();
             Title = "Blackwall — Muro Negro" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
-            Width = 1400;
-            Height = 880;
-            MinWidth = 1080;
-            MinHeight = 700;
+            // Never ask for more than the work area: small laptops or 125–150 % scaling would clip the restored window.
+            Rect workArea = SystemParameters.WorkArea;
+            Width = Math.Min(1400, workArea.Width);
+            Height = Math.Min(880, workArea.Height);
+            MinWidth = Math.Min(1080, workArea.Width);
+            MinHeight = Math.Min(700, workArea.Height);
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
             // Configuración de Ventana Sin Bordes de Windows (Custom WindowChrome) y Maximizado Permanente
@@ -2354,8 +2356,10 @@ namespace Blackwall
                     <Setter Property='MinHeight' Value='38'/>
                     <Setter Property='BorderBrush' Value='{DynamicResource MaterialEdge}'/>
                     <Setter Property='BorderThickness' Value='1'/>
+                    <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
                     <Setter Property='Template'>
                         <Setter.Value><ControlTemplate TargetType='Button'>
+                            <Grid>
                             <Border x:Name='Frame'
                                 BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'
                                 CornerRadius='20' SnapsToDevicePixels='True'>
@@ -2368,11 +2372,16 @@ namespace Blackwall
                                     <Border x:Name='Sheen' BorderThickness='1.4' Margin='-1' CornerRadius='20' IsHitTestVisible='False'/>
                                 </Grid>
                             </Border>
+                            <!-- Windows-style keyboard focus: 2px ring outside the pill, never a rectangle over the rounded shape. -->
+                            <Border x:Name='FocusRing' BorderBrush='{DynamicResource CyberFocusBrush}' BorderThickness='2' Margin='-3'
+                                CornerRadius='23' IsHitTestVisible='False' Visibility='Hidden'/>
+                            </Grid>
                             <ControlTemplate.Triggers>
                                 <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='1'/></Trigger>
                                 <Trigger Property='IsPressed' Value='True'><Setter TargetName='Frame' Property='Opacity' Value='0.72'/></Trigger>
                                 <Trigger Property='IsKeyboardFocused' Value='True'>
                                     <Setter TargetName='Frame' Property='BorderBrush' Value='{DynamicResource CyberFocusBrush}'/>
+                                    <Setter TargetName='FocusRing' Property='Visibility' Value='Visible'/>
                                 </Trigger>
                                 <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.4'/></Trigger>
                             </ControlTemplate.Triggers>
@@ -4614,10 +4623,30 @@ namespace Blackwall
             IInputElement previousFocus = Keyboard.FocusedElement;
             Window dialog = CreateOtaUpdateDialog();
             _otaDialog = dialog;
-            _rootBorder.Opacity = 0.55;
-            _rootBorder.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 3 };
+            SetModalBackdrop(true);
             try { dialog.ShowDialog(); }
-            finally { _otaDialog = null; _rootBorder.Effect = null; _rootBorder.Opacity = 1; if (previousFocus != null) Keyboard.Focus(previousFocus); }
+            finally { _otaDialog = null; SetModalBackdrop(false); if (previousFocus != null) Keyboard.Focus(previousFocus); }
+        }
+
+        private Border _modalScrim;
+
+        // Same dimming as the former 55 % opacity (content blended toward the app background) without a
+        // full-window blur, which re-rendered the whole window every time anything underneath changed.
+        private void SetModalBackdrop(bool visible)
+        {
+            if (visible && _modalScrim == null)
+            {
+                _modalScrim = new Border { Background = BgApp, Opacity = 0.45, IsHitTestVisible = false };
+                Grid.SetRowSpan(_modalScrim, Math.Max(1, _rootGrid.RowDefinitions.Count));
+                Grid.SetColumnSpan(_modalScrim, Math.Max(1, _rootGrid.ColumnDefinitions.Count));
+                Panel.SetZIndex(_modalScrim, int.MaxValue);
+                _rootGrid.Children.Add(_modalScrim);
+            }
+            else if (!visible && _modalScrim != null)
+            {
+                _rootGrid.Children.Remove(_modalScrim);
+                _modalScrim = null;
+            }
         }
 
         private Window CreateOtaUpdateDialog()

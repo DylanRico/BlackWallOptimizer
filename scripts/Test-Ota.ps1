@@ -1,4 +1,4 @@
-param([string]$PackagePath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\releases\1.4.1'))
+param([string]$PackagePath = (Join-Path (Split-Path -Parent $PSScriptRoot) ('artifacts\releases\' + (Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'catalogs\version.json') -Raw -Encoding UTF8 | ConvertFrom-Json).appVersion)))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'

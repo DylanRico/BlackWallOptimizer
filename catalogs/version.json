@@ -1,14 +1,10 @@
 {
-  "appVersion": "1.4.4",
+  "appVersion": "1.4.5",
   "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
   "changelog": [
-    "Filtros de sección instantáneos sin reconstruir el buscador ni las tarjetas.",
-    "Selección de aplicaciones y consola con actualizaciones parciales.",
-    "Recursos de reflejos y trazos reutilizados conservando el diseño grafito y plata.",
-    "Desplazamiento continuo sincronizado con el render, sin cambios bruscos entre gestos.",
-    "Modo claro de plata mate con superficies menos luminosas y texto contrastado.",
-    "Aviso vertical de actualizaciones firmadas con mejoras, actualización voluntaria y posposición.",
-    "Solicitud UAC al abrir y traspaso del actualizador al usuario normal de Windows.",
-    "Canal de actualización integrado: sin campo editable ni sustitución mediante configuración local."
+    "Aviso de actualización más fluido: el fondo se atenúa sin desenfocar toda la ventana.",
+    "Contorno de foco redondeado y visible al navegar con el teclado.",
+    "Ventana adaptada a pantallas pequeñas y a escalados altos de Windows.",
+    "Compilación y empaquetado con comprobaciones previas y mensajes de error más claros."
   ]
 }

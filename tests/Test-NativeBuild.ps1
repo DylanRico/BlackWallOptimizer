@@ -40,14 +40,32 @@ try { $ErrorActionPreference = 'Continue'; & $build 2>&1 | Out-Null }
 finally { $ErrorActionPreference = 'Stop' }
 Assert ($LASTEXITCODE -ne 0 -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'A compiler failure replaced the last usable executable.'
 Copy-Item -LiteralPath (Join-Path $project 'native-wpf\BlackwallApp.cs') -Destination $source -Force
+$catalog = Join-Path $fixture 'catalogs\tweaks.json'
+$catalogOriginal = [IO.File]::ReadAllText($catalog)
+[IO.File]::WriteAllText($catalog, '{ "broken": ')
+try {
+    try { $ErrorActionPreference = 'Continue'; $out = (& $build 2>&1 | Out-String) }
+    finally { $ErrorActionPreference = 'Stop' }
+    Assert ($LASTEXITCODE -ne 0 -and $out -match 'tweaks\.json no es JSON valido' -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'An invalid catalog must fail before compiling and keep the executable.'
+} finally { [IO.File]::WriteAllText($catalog, $catalogOriginal) }
+$ico = Join-Path $fixture 'src-tauri\icons\icon.ico'
+Move-Item -LiteralPath $ico -Destination ($ico + '.hidden')
+try {
+    try { $ErrorActionPreference = 'Continue'; $out = (& $build 2>&1 | Out-String) }
+    finally { $ErrorActionPreference = 'Stop' }
+    Assert ($LASTEXITCODE -ne 0 -and $out -match 'icon\.ico' -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'A missing icon must be reported by path and keep the executable.'
+} finally { Move-Item -LiteralPath ($ico + '.hidden') -Destination $ico }
+Assert (@(Get-ChildItem -LiteralPath (Join-Path $fixture 'artifacts\native-build') -ErrorAction SilentlyContinue).Count -eq 0) 'Failed builds must not leave temporary folders.'
 $lock = [IO.File]::Open($exe, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 try {
     try { $ErrorActionPreference = 'Continue'; & $build 2>&1 | Out-Null }
     finally { $ErrorActionPreference = 'Stop' }
     Assert ($LASTEXITCODE -ne 0 -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'A locked target must remain unchanged.'
 } finally { $lock.Dispose() }
-& $build | Out-Null
+$out = (& $build | Out-String)
 Assert ($LASTEXITCODE -eq 0) 'Build did not recover after unlocking the target.'
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $fixture 'catalogs\version.json') -Raw | ConvertFrom-Json).appVersion + '.0'
+Assert ($out -match 'Tipo: portable' -and $out -match ('Version: ' + [Regex]::Escape($expectedVersion)) -and $out -match 'Respaldo anterior:' -and [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion -eq $expectedVersion) 'Build summary must report kind, PE version and backup.'
 $backup = Get-ChildItem -LiteralPath (Join-Path $fixture 'artifacts\build-backups') -Filter '*.bak'
 Assert (@($backup).Count -eq 1 -and (Get-FileHash -LiteralPath $backup.FullName).Hash -eq $beforeHash) 'Replacement must retain an exact backup.'
 $preview = Join-Path $fixture 'scripts\Build-Preview.ps1'

@@ -8,7 +8,7 @@ Implementación local del 25 de octubre de 2026, publicada el 26 de octubre de 2
 
 - `catalogs/version.json` es metadato de compilación: versión predeterminada local `1.4.4`, dirección del índice firmado y notas. Ya no contiene el hash de su propio ejecutable. La URL se integra en el ejecutable: no existe campo editable ni se lee una URL sustitutiva desde AppData. Cambiar el metadato local no publica ni instala una OTA.
 - `scripts/Build-Native.ps1` genera los atributos de versión del ensamblado y el recurso `version.json` desde el mismo valor. No hay una segunda versión fija en C#.
-- `Prepare-Release.ps1 -Version 1.4.1` aplica esa versión tanto al PE como al metadato embebido del paquete, sin cambiar la versión predeterminada del árbol ni reemplazar el portable raíz.
+- `Prepare-Release.ps1 -Version X.Y.Z` exige que `catalogs/version.json` declare esa misma versión y tenga notas, porque el changelog firmado sale de ahí. Compila y verifica en staging **antes** de descifrar la clave privada; si algo falla, borra su staging y no deja paquete a medias. No reemplaza el portable raíz.
 - El paquete preparado es `artifacts/releases/1.4.1/Blackwall.exe` junto con `update.json`. El ejecutable inicial con el verificador y la clave pública se compila como `Blackwall.exe` raíz, versión `1.4.0`.
 - Cada carpeta de versión preparada es inmutable para el publicador: si existe, el script falla en lugar de sobrescribirla. Los borradores anteriores conservados en otras carpetas de `artifacts` no son entregas publicadas.
 

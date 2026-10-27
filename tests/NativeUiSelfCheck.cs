@@ -242,6 +242,8 @@ internal static class NativeUiSelfCheck
             Button button = (Button)Field("_themeBtn");
             var sheen = (Border)button.Template.FindName("Sheen", button);
             Check(sheen.BorderBrush is LinearGradientBrush, "button reflection uses an animated gradient");
+            var focusRing = button.Template.FindName("FocusRing", button) as Border;
+            Check(button.FocusVisualStyle == null && focusRing != null && focusRing.BorderThickness.Left == 2 && focusRing.Visibility == Visibility.Hidden, "buttons use a rounded 2px keyboard focus ring instead of the rectangular system dots");
             object energy = Field("_headerEnergy");
             energy.GetType().GetMethod("SetRunning").Invoke(energy, new object[] { true });
             Check((bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "electric trace runs on demand");
@@ -346,6 +348,13 @@ internal static class NativeUiSelfCheck
         Check(updateButtons.Contains("Actualizar ahora") && updateButtons.Contains("Más tarde"), "update invitation retains an explicit install choice and postponement");
         Check(Descendants((DependencyObject)modal.Content).OfType<TextBox>().All(t => t.IsReadOnly), "update dialog exposes no editable update source");
         Check(!Descendants((DependencyObject)modal.Content).OfType<Expander>().Any(), "update origin is absent from the production dialog");
+        var ownerRoot = (Border)_type.GetField("_rootBorder", Private).GetValue(modalOwner);
+        var ownerGrid = (Grid)_type.GetField("_rootGrid", Private).GetValue(modalOwner);
+        int ownerChildren = ownerGrid.Children.Count;
+        _type.GetMethod("SetModalBackdrop", Private).Invoke(modalOwner, new object[] { true });
+        Check(ownerRoot.Effect == null && ownerRoot.Opacity == 1 && ownerGrid.Children.Count == ownerChildren + 1, "update backdrop dims with a scrim instead of a full-window blur");
+        _type.GetMethod("SetModalBackdrop", Private).Invoke(modalOwner, new object[] { false });
+        Check(ownerGrid.Children.Count == ownerChildren, "closing the update dialog removes its backdrop");
         Snapshot(directory, "native-update-dialog.png", 492, 700, (FrameworkElement)modal.Content);
         modal.Close();
         _type.GetField("_isDark", Private).SetValue(modalOwner, false);
