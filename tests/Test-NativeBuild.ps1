@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 $fixture = Join-Path $project ('artifacts\build checks ' + [Guid]::NewGuid().ToString('N'))
-foreach ($folder in @('scripts', 'native-wpf', 'catalogs', 'assets\icons', 'src-tauri\icons')) {
+foreach ($folder in @('scripts', 'native-wpf', 'catalogs', 'assets\icons')) {
     New-Item -ItemType Directory -Path (Join-Path $fixture $folder) -Force | Out-Null
 }
-foreach ($relative in @('Build-Portable-Exe.bat', 'scripts\Build-Native.ps1', 'scripts\Build-Preview.ps1', 'native-wpf\BlackwallApp.cs', 'native-wpf\OtaUpdate.cs', 'assets\update-public-key.xml', 'src-tauri\icons\icon.ico')) {
+foreach ($relative in @('Build-Portable-Exe.bat', 'scripts\Build-Native.ps1', 'scripts\Build-Preview.ps1', 'native-wpf\BlackwallApp.cs', 'native-wpf\OtaUpdate.cs', 'assets\update-public-key.xml', 'assets\app.ico')) {
     Copy-Item -LiteralPath (Join-Path $project $relative) -Destination (Join-Path $fixture $relative)
 }
 Copy-Item -Path (Join-Path $project 'catalogs\*.json') -Destination (Join-Path $fixture 'catalogs')
@@ -48,12 +48,12 @@ try {
     finally { $ErrorActionPreference = 'Stop' }
     Assert ($LASTEXITCODE -ne 0 -and $out -match 'tweaks\.json no es JSON valido' -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'An invalid catalog must fail before compiling and keep the executable.'
 } finally { [IO.File]::WriteAllText($catalog, $catalogOriginal) }
-$ico = Join-Path $fixture 'src-tauri\icons\icon.ico'
+$ico = Join-Path $fixture 'assets\app.ico'
 Move-Item -LiteralPath $ico -Destination ($ico + '.hidden')
 try {
     try { $ErrorActionPreference = 'Continue'; $out = (& $build 2>&1 | Out-String) }
     finally { $ErrorActionPreference = 'Stop' }
-    Assert ($LASTEXITCODE -ne 0 -and $out -match 'icon\.ico' -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'A missing icon must be reported by path and keep the executable.'
+    Assert ($LASTEXITCODE -ne 0 -and $out -match 'app\.ico' -and (Get-FileHash -LiteralPath $exe).Hash -eq $beforeHash) 'A missing icon must be reported by path and keep the executable.'
 } finally { Move-Item -LiteralPath ($ico + '.hidden') -Destination $ico }
 Assert (@(Get-ChildItem -LiteralPath (Join-Path $fixture 'artifacts\native-build') -ErrorAction SilentlyContinue).Count -eq 0) 'Failed builds must not leave temporary folders.'
 $lock = [IO.File]::Open($exe, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -74,6 +74,6 @@ finally { $ErrorActionPreference = 'Stop' }
 Assert ($LASTEXITCODE -ne 0 -and -not (Test-Path -LiteralPath (Join-Path $fixture 'outside-artifacts.exe'))) 'Preview escaped its output boundary.'
 $publisher = Get-Content -LiteralPath (Join-Path $project 'Publish-Release.bat') -Raw
 Assert ($publisher -match 'Prepare-Release.ps1' -and $publisher -notmatch 'ICON_RES|%CSC%|New-SelfSignedCertificate') 'Publisher must delegate to the signed package builder.'
-$launcher = Get-Content -LiteralPath (Join-Path $project 'Start-Blackwall.bat') -Raw
-Assert ($launcher.IndexOf('if exist "%~dp0Blackwall.exe"') -lt $launcher.IndexOf('if exist "src-tauri\target\release\blackwall.exe"')) 'Launcher must prefer the current WPF portable.'
 Write-Output "PASS: $checks native build checks (isolated fixture only)."
+# Only this run's own fixture is removed after a pass; a failing run keeps it for inspection.
+Remove-Item -LiteralPath $fixture -Recurse -Force

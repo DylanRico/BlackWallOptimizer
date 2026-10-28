@@ -55,14 +55,14 @@ try {
             }
             $frames += [pscustomobject]@{ Size=$size; Bytes=$bytes }
             if ($size -eq 256) {
-                foreach ($relative in @('assets\icons\blackwall-mark.png', 'src-tauri\icons\icon.png', 'src\blackwall-mark.png')) {
+                foreach ($relative in @('assets\icons\blackwall-mark.png')) {
                     [System.IO.File]::WriteAllBytes((Join-Path $root $relative), $bytes)
                 }
             }
         } finally { $graphics.Dispose(); $bitmap.Dispose(); $stream.Dispose() }
     }
 } finally { $source.Dispose() }
-$icoPath = Join-Path $root 'src-tauri\icons\icon.ico'
+$icoPath = Join-Path $root 'assets\app.ico'
 $file = [System.IO.File]::Create($icoPath)
 $writer = New-Object System.IO.BinaryWriter($file)
 try {

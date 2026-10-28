@@ -1,14 +1,15 @@
 {
-  "appVersion": "1.4.6",
+  "appVersion": "1.4.7",
   "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
   "changelog": [
-    "Navegación y tarjetas reorganizadas, con incorporación progresiva del contenido al cambiar de sección.",
-    "Registro de actividad con filtros, estados de operación y actualizaciones agrupadas de las entradas.",
-    "Optimizaciones con descripciones y advertencias revisadas; catálogo depurado de 45 a 43 ajustes.",
-    "Corrección de valores REG_DWORD de 32 bits y comprobación de todos los criterios verificables de cada ajuste.",
-    "Los fallos de aplicación se muestran por ajuste y en los lotes, sin presentar una ejecución parcial como completada.",
-    "Herramientas de mantenimiento: códigos de error y tiempos de espera ya no se presentan como éxito.",
-    "Se conserva el diseño grafito y plata, el modo claro mate, el desplazamiento suave y el aviso vertical de actualización.",
-    "Paquete OTA firmado con estas mismas novedades para mostrarlas antes de actualizar."
+    "Fondo de malla roja nítido a la resolución real de la pantalla, a 60 fps al mover el cursor y con menos consumo en reposo.",
+    "Exportación de informes del equipo en HTML, Excel, Markdown, texto, CSV y JSON, con secciones definidas y opción para ocultar datos identificativos.",
+    "Actualizaciones: la app sigue visible durante la descarga y verificación, con progreso real y cancelación.",
+    "El reinicio de una actualización espera a que terminen las tareas en curso antes del reemplazo seguro.",
+    "Las notas de la versión instalada siguen visibles y las novedades de una versión nueva se muestran aparte.",
+    "Aviso automático de actualización más discreto, para revisar los cambios cuando quieras.",
+    "Limpieza de temporales de actualizaciones terminadas sin borrar los respaldos de recuperación.",
+    "Reflejos plata y brasa en botones, tarjetas y buscador.",
+    "Barra de estado y progreso de descargas sin bloquear las tareas en segundo plano."
   ]
 }

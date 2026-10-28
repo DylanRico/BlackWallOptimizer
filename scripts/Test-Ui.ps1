@@ -12,7 +12,8 @@ $references = @('WPF\PresentationFramework.dll', 'WPF\PresentationCore.dll', 'WP
 $previewExe = Join-Path $outputFolder 'Blackwall.preview.exe'
 & (Join-Path $PSScriptRoot 'Build-Preview.ps1') -OutputPath $previewExe
 
-$checkExe = Join-Path $outputFolder 'NativeUiSelfCheck.exe'
+# The test runner lives in %TEMP%: artifacts keeps a single app executable (Blackwall.preview.exe).
+$checkExe = Join-Path $env:TEMP 'BlackwallNativeUiSelfCheck.exe'
 $checkArgs = @('/nologo', '/target:exe', "/out:$checkExe") + $references + (Join-Path $projectRoot 'tests\NativeUiSelfCheck.cs')
 & $compiler @checkArgs
 if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación de las pruebas WPF.' }
@@ -20,8 +21,6 @@ $runArgs = @($previewExe, (Join-Path $outputFolder 'native'))
 if ($ScanHardware) { $runArgs += '--scan' }
 & $checkExe @runArgs
 if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas WPF.' }
-& node --test (Join-Path $projectRoot 'tests\web-ui.test.mjs')
-if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas web.' }
 & powershell.exe -NoProfile -File (Join-Path $projectRoot 'tests\Test-NativeBuild.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas del compilador nativo.' }
 Write-Output "Verificado: $previewExe"

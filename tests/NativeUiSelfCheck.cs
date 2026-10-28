@@ -52,6 +52,7 @@ internal static class NativeUiSelfCheck
             CheckWindowBounds();
             CheckStartupRouting();
             CheckSmoothScrolling();
+            CheckParticles();
             CheckCatalogSelection();
             CheckAdaptiveCards();
 
@@ -61,6 +62,16 @@ internal static class NativeUiSelfCheck
             Button navTipButton = ((Dictionary<string, Button>)Field("_navButtons"))["monitor"];
             navTipButton.RaiseEvent(new KeyboardFocusChangedEventArgs(Keyboard.PrimaryDevice, 0, null, navTipButton) { RoutedEvent = Keyboard.GotKeyboardFocusEvent });
             Check(!((ToolTip)navTipButton.ToolTip).IsOpen, "keyboard focus does not pin a category tooltip open");
+            var scanSource = new TaskCompletionSource<int>();
+            Task simulatedScan = Read("hardware", "Auditoría de hardware", () => scanSource.Task);
+            PumpUntil(() => Reads.Contains("hardware"));
+            Check(Activity.HorizontalAlignment == HorizontalAlignment.Center && Activity.VerticalAlignment == VerticalAlignment.Center, "hardware scan is centered");
+            Check(((ProgressBar)Field("_activityProgress")).Value == 0, "hardware scan begins at zero completed stages");
+            Call("ReportReadProgress", "hardware", 4, 8, "Memoria y sistema · 4/8");
+            Check(((ProgressBar)Field("_activityProgress")).Value == 50 && ((TextBlock)Field("_activityDetail")).Text.Contains("Memoria"), "hardware scan shows real completed stage progress");
+            Snapshot(args[1], "native-hardware-scan.png");
+            scanSource.SetResult(0); PumpUntil(() => simulatedScan.IsCompleted);
+            Check(Activity.Visibility == Visibility.Collapsed, "completed hardware scan hides its panel");
             Console.WriteLine("Shell construction + offscreen render: " + shellWatch.ElapsedMilliseconds + " ms (not a full launch benchmark).");
             SetField("_activeTab", "test");
 
@@ -146,6 +157,7 @@ internal static class NativeUiSelfCheck
             CheckVisualPreferences(args[1], preferences);
             CheckTweakPresentation(args[1]);
             CheckTweakEngine();
+            CheckHardwareReports();
             CheckGraphiteInteractions(args[1]);
             CheckStableSectionFilters(args[1]);
             CheckContrast();
@@ -245,11 +257,17 @@ internal static class NativeUiSelfCheck
             Check(sheen.BorderBrush is LinearGradientBrush, "button reflection uses an animated gradient");
             var focusRing = button.Template.FindName("FocusRing", button) as Border;
             Check(button.FocusVisualStyle == null && focusRing != null && focusRing.BorderThickness.Left == 2 && focusRing.Visibility == Visibility.Hidden, "buttons use a rounded 2px keyboard focus ring instead of the rectangular system dots");
+            var liquidEdge = (RotateTransform)Field("_dashboardEdgeRotation");
+            Call("SetDashboardEdgeMotion", true);
+            Check(liquidEdge.HasAnimatedProperties, "dashboard silver edge starts a shared animation");
+            PumpUntil(() => liquidEdge.Angle > 1);
+            Check(liquidEdge.Angle > 1, "dashboard silver edge moves without pointer interaction");
             object energy = Field("_headerEnergy");
             energy.GetType().GetMethod("SetRunning").Invoke(energy, new object[] { true });
             Check((bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "electric trace runs on demand");
             SetField("_reduceMotion", true);
             Call("UpdateMotionPreference");
+            Check(!liquidEdge.HasAnimatedProperties, "reduced motion stops the dashboard silver edge");
             Check(animated.Count == 0 && !first.HasAnimatedProperties && first.RenderTransform == Transform.Identity, "reduced motion removes in-flight card animations");
             Check(!(bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "reduced motion stops the electric trace timer");
             Check(sheen.BorderBrush == null, "reduced motion clears active button reflection");
@@ -347,7 +365,11 @@ internal static class NativeUiSelfCheck
         Check(modal.Width < modal.Height, "verified update invitation uses a portrait layout");
         var updateButtons = Descendants((DependencyObject)modal.Content).OfType<Button>().Select(b => Convert.ToString(b.Content)).ToList();
         Check(updateButtons.Contains("Actualizar ahora") && updateButtons.Contains("Más tarde"), "update invitation retains an explicit install choice and postponement");
-        Check(Descendants((DependencyObject)modal.Content).OfType<TextBox>().All(t => t.IsReadOnly), "update dialog exposes no editable update source");
+        Check(!Descendants((DependencyObject)modal.Content).OfType<TextBox>().Any(), "update notes use readable content rather than an editable field");
+        var updateText = Descendants((DependencyObject)modal.Content).OfType<TextBlock>().Select(t => t.Text).ToList();
+        Check(updateText.Any(t => t.Contains("EN ESTA VERSIÓN")) && updateText.Any(t => t.Contains("NOVEDADES DE 99.0.0")), "installed notes and verified new version have separate headings");
+        var updateActions = Descendants((DependencyObject)modal.Content).OfType<Button>().Where(b => Convert.ToString(b.Content) == "Actualizar ahora" || Convert.ToString(b.Content) == "Más tarde").ToList();
+        Check(updateActions.Count == 2 && Object.ReferenceEquals(updateActions[0].Parent, updateActions[1].Parent) && updateActions[0].Parent is Grid && ((Grid)updateActions[0].Parent).ColumnDefinitions.Count == 2, "update actions share two aligned columns");
         Check(!Descendants((DependencyObject)modal.Content).OfType<Expander>().Any(), "update origin is absent from the production dialog");
         var ownerRoot = (Border)_type.GetField("_rootBorder", Private).GetValue(modalOwner);
         var ownerGrid = (Grid)_type.GetField("_rootGrid", Private).GetValue(modalOwner);
@@ -363,6 +385,18 @@ internal static class NativeUiSelfCheck
         modal = (Window)_type.GetMethod("CreateOtaUpdateDialog", Private).Invoke(modalOwner, null);
         Snapshot(directory, "native-update-dialog-light.png", 492, 700, (FrameworkElement)modal.Content);
         modal.Close();
+        _type.GetField("_availableRelease", Private).SetValue(modalOwner, null);
+        modal = (Window)_type.GetMethod("CreateOtaUpdateDialog", Private).Invoke(modalOwner, null);
+        Check(Descendants((DependencyObject)modal.Content).OfType<TextBlock>().Any(t => t.Text.Contains("EN ESTA VERSIÓN")), "installed notes remain visible without a remote update");
+        modal.Close();
+        _type.GetField("_reduceMotion", Private).SetValue(modalOwner, true);
+        object[] toastArgs = { new Action(() => { }), null, null, null };
+        var toast = (Border)_type.GetMethod("CreateOtaProgress", Private).Invoke(modalOwner, toastArgs);
+        Check(ownerGrid.Children.Contains(toast) && toastArgs[1] is TextBlock && toastArgs[2] is ProgressBar, "update progress is an in-window panel with real status and progress controls");
+        ((TextBlock)toastArgs[1]).Text = "Descargando · 64 % (fixture)";
+        ((ProgressBar)toastArgs[2]).IsIndeterminate = false; ((ProgressBar)toastArgs[2]).Value = 64;
+        Snapshot(directory, "native-update-progress.png", 1400, 880, (FrameworkElement)modalOwner.Content);
+        ownerGrid.Children.Remove(toast);
         modalOwner.Close();
         object originalProcesses = Field("_liveScripts");
         var processFixture = new Dictionary<string, object> { { "pid", 2147483000 }, { "parentPid", 0 }, { "name", "fixture.exe" }, { "commandLine", "UI fixture only" }, { "memoryMb", 12.5 } };
@@ -663,6 +697,54 @@ internal static class NativeUiSelfCheck
         Call("UpdateMotionPreference");
     }
 
+    private static void CheckHardwareReports()
+    {
+        object saved = Field("_hardware");
+        Func<object[], List<object>> list = items => items.ToList();
+        var fixture = new Dictionary<string, object>
+        {
+            { "chassis", new Dictionary<string, object> { { "manufacturer", "ACME" }, { "model", "Modelo <script>alert(1)</script>" }, { "deviceType", "Laptop" }, { "isLaptop", true }, { "serialNumber", "SERIAL-ABC-12345" }, { "uuid", "UUID-SECRET-0001" } } },
+            { "motherboard", new Dictionary<string, object> { { "manufacturer", "ACME" }, { "product", "Board" }, { "serialNumber", "BOARD-SERIAL-9876" }, { "bootMode", "UEFI" } } },
+            { "cpu", new Dictionary<string, object> { { "name", "CPU de prueba" }, { "physicalCores", 6 }, { "logicalThreads", 12 } } },
+            { "memory", new Dictionary<string, object> { { "totalGb", 16 }, { "usagePercent", 40 }, { "memoryType", "DDR4" }, { "slots", list(new object[] { new Dictionary<string, object> { { "slotName", "DIMM 0" }, { "occupied", true }, { "capacityGb", 8 }, { "serialNumber", "STICK-SERIAL-5555" } } }) } } },
+            { "storage", list(new object[] { new Dictionary<string, object> { { "friendlyName", "Disco; \"rápido\"" }, { "sizeGb", 500 }, { "freeGb", 200 }, { "serialNumber", "DISK-SERIAL-7777" } } }) },
+            { "gpus", list(new object[] { new Dictionary<string, object> { { "name", "GPU de prueba" } } }) },
+            { "battery", new Dictionary<string, object> { { "present", true }, { "healthPercent", 90 } } },
+            { "osNetwork", new Dictionary<string, object> { { "caption", "Windows 11" }, { "partialProductKey", "KEY99" }, { "adapters", list(new object[] { new Dictionary<string, object> { { "name", "Wi-Fi" }, { "macAddress", "AA-BB-CC-DD-EE-FF" }, { "ipv4", "192.168.1.50" } } }) } } },
+            { "scannedAt", "12:00:00" }
+        };
+        SetField("_hardware", fixture);
+        try
+        {
+            string[] secrets = { "SERIAL-ABC-12345", "UUID-SECRET-0001", "BOARD-SERIAL-9876", "STICK-SERIAL-5555", "DISK-SERIAL-7777", "AA-BB-CC-DD-EE-FF", "192.168.1.50", "KEY99" };
+            foreach (string format in new[] { "html", "md", "txt", "csv", "json" })
+            {
+                string hidden = (string)Call("RenderHardwareReport", format, true);
+                string shown = (string)Call("RenderHardwareReport", format, false);
+                Check(secrets.All(secret => !hidden.Contains(secret)) && hidden.Contains("2345"), format + " report hides identifiers but keeps the last 4 serial characters");
+                Check(shown.Contains("SERIAL-ABC-12345") && shown.Contains("192.168.1.50"), format + " report includes identifiers when the user chooses to");
+                Check(new[] { "Resumen", "Equipo y firmware", "Procesador", "Memoria", "Almacenamiento", "Gráficos", "Batería", "Windows y red", "Estado de Blackwall" }.All(title => hidden.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0), format + " report has every section");
+            }
+            string html = (string)Call("RenderHardwareReport", "html", true);
+            Check(!html.Contains("<script>alert(1)</script>") && html.Contains("&lt;script&gt;"), "HTML report escapes text taken from the hardware");
+            string csv = (string)Call("RenderHardwareReport", "csv", true);
+            Check(csv.StartsWith("Sección;Elemento;Propiedad;Valor") && csv.Contains("\"Unidades: Disco; \"\"rápido\"\"\""), "CSV report quotes cells with separators and quotes");
+            string json = (string)Call("RenderHardwareReport", "json", true);
+            var parsed = (Dictionary<string, object>)new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(json);
+            Check(parsed.ContainsKey("secciones") && !parsed.ContainsKey("datosOriginales") && json.Contains("\n  "), "JSON report is valid, indented and drops raw data when anonymized");
+            byte[] xlsx = (byte[])Call("RenderHardwareReportXlsx", true);
+            using (var stream = new MemoryStream(xlsx))
+            using (var package = System.IO.Packaging.Package.Open(stream, FileMode.Open, FileAccess.Read))
+            {
+                var sheets = package.GetParts().Where(p => p.Uri.ToString().StartsWith("/xl/worksheets/")).ToList();
+                string all = string.Concat(package.GetParts().Select(p => new StreamReader(p.GetStream()).ReadToEnd()));
+                Check(sheets.Count == 9 && package.GetRelationships().Any() && all.Contains("<sheet name=\"Equipo y firmware\""), "Excel report has one named sheet per section");
+                Check(secrets.All(secret => !all.Contains(secret)) && all.Contains("6 núcleos, 12 hilos") && !all.Contains("<v>"), "Excel report hides identifiers and stores every value as text (no auto dates)");
+            }
+        }
+        finally { SetField("_hardware", saved); }
+    }
+
     // Real registry round-trip in a throwaway HKCU key; no system setting is touched.
     private static void CheckTweakEngine()
     {
@@ -785,6 +867,45 @@ internal static class NativeUiSelfCheck
         Check(requires(new[] { "--ota-rollback", "fixture" }), "rollback reopening follows the normal permission flow");
     }
 
+    private static void CheckParticles()
+    {
+        Type particleType = _type.Assembly.GetType("Blackwall.GraphiteNetwork", true);
+        var network = (FrameworkElement)Activator.CreateInstance(particleType);
+        Check(!network.IsHitTestVisible, "particle surface never captures clicks or wheel events");
+        var points = (Point[])particleType.GetField("_points", Private).GetValue(network);
+        network.Measure(new Size(640, 400)); network.Arrange(new Rect(0, 0, 640, 400)); network.UpdateLayout();
+        Func<byte[]> render = () => { network.UpdateLayout(); var bitmap = new RenderTargetBitmap(640, 400, 96, 96, PixelFormats.Pbgra32); bitmap.Render(network); var bytes = new byte[640 * 400 * 4]; bitmap.CopyPixels(bytes, 640 * 4, 0); return bytes; };
+        byte[] idle = render();
+        particleType.GetMethod("SetPointer").Invoke(network, new object[] { (Point?)new Point(points[0].X * 640 + 8, points[0].Y * 400) });
+        byte[] moved = render();
+        Check(!idle.SequenceEqual(moved), "pointer proximity changes rendered particle positions");
+        Point[] savedPoints = (Point[])points.Clone();
+        for (int i = 0; i < points.Length; i++) points[i] = new Point(0, 0);
+        points[0] = new Point(0.25, 0.5);
+        particleType.GetMethod("SetPointer").Invoke(network, new object[] { null });
+        byte[] withoutLink = render();
+        particleType.GetMethod("SetPointer").Invoke(network, new object[] { (Point?)new Point(288, 200) });
+        byte[] withLink = render();
+        Check(Enumerable.Range(0, 9).Any(i => withoutLink[((199 + i / 3) * 640 + 223 + i % 3) * 4 + 3] != withLink[((199 + i / 3) * 640 + 223 + i % 3) * 4 + 3]), "cursor draws a connection to a nearby particle");
+        Array.Copy(savedPoints, points, points.Length);
+        Point before = points[0];
+        particleType.GetMethod("SetPointer").Invoke(network, new object[] { (Point?)new Point(100, 100) });
+        Check((bool)particleType.GetProperty("PointerActive").GetValue(network, null), "particle surface receives cursor position");
+        particleType.GetMethod("SetRunning").Invoke(network, new object[] { true });
+        var visualBefore = (Point)particleType.GetField("_visualPointer", Private).GetValue(network);
+        particleType.GetMethod("SetPointer").Invoke(network, new object[] { (Point?)new Point(500, 300) });
+        Check((Point)particleType.GetField("_visualPointer", Private).GetValue(network) == visualBefore, "cursor position does not jump instantly while particles animate");
+        PumpUntil(() => (Point)particleType.GetField("_visualPointer", Private).GetValue(network) != visualBefore);
+        Check((Point)particleType.GetField("_visualPointer", Private).GetValue(network) != new Point(500, 300), "cursor reaction approaches the target gradually");
+        PumpUntil(() => points[0] != before);
+        Check((bool)particleType.GetProperty("Running").GetValue(network, null), "one shared timer moves particles while enabled");
+        particleType.GetMethod("SetRunning").Invoke(network, new object[] { false });
+        Check(!(bool)particleType.GetProperty("Running").GetValue(network, null) && !(bool)particleType.GetProperty("PointerActive").GetValue(network, null), "stopping motion detaches the timer and pointer");
+        particleType.GetMethod("SetRunning").Invoke(network, new object[] { true });
+        network.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+        Check(!(bool)particleType.GetProperty("Running").GetValue(network, null), "unloading the background stops its shared timer");
+    }
+
     private static void CheckSmoothScrolling()
     {
         Type smoothType = _type.Assembly.GetType("Blackwall.SmoothScrollViewer", true);
@@ -798,6 +919,9 @@ internal static class NativeUiSelfCheck
         scroll.Arrange(new Rect(0, 0, 600, 300));
         scroll.UpdateLayout();
         Check(scroll.ScrollableHeight > 0, "scroll fixture has content beyond the viewport");
+        var outward = new MouseWheelEventArgs(Mouse.PrimaryDevice, 999, 120) { RoutedEvent = Mouse.MouseWheelEvent };
+        smoothType.GetMethod("OnMouseWheel", Private).Invoke(scroll, new object[] { outward });
+        Check(!outward.Handled, "wheel input at the upper edge can reach an enclosing scroll viewer");
         MethodInfo wheel = smoothType.GetMethod("OnMouseWheel", Private);
         int wheelTimestamp = 1000;
         Func<int, MouseWheelEventArgs> input = delta => new MouseWheelEventArgs(Mouse.PrimaryDevice, wheelTimestamp += 200, delta) { RoutedEvent = Mouse.MouseWheelEvent };
@@ -831,6 +955,7 @@ internal static class NativeUiSelfCheck
         double step = SystemParameters.WheelScrollLines < 0 ? scroll.ViewportHeight : SystemParameters.WheelScrollLines * 16.0;
         for (int i = 0; i < 60; i++)
             wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 10000 + i * 8, -6) { RoutedEvent = Mouse.MouseWheelEvent } });
+        Check((double)smoothType.GetField("_responseMilliseconds", Private).GetValue(scroll) == 24.0, "small touchpad deltas keep their existing response");
         Check(!scroll.HasAnimatedProperties, "precision touchpad burst allocates no repeated animation clocks");
         PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
         scroll.UpdateLayout();
@@ -841,6 +966,7 @@ internal static class NativeUiSelfCheck
         Check(Math.Abs(scroll.VerticalOffset - step * 2.95) < 0.6, "touchpad reversal responds without waiting for a tween");
         for (int i = 0; i < 30; i++)
             wheel.Invoke(scroll, new object[] { new MouseWheelEventArgs(Mouse.PrimaryDevice, 11000 + i * 8, -120) { RoutedEvent = Mouse.MouseWheelEvent } });
+        Check((double)smoothType.GetField("_responseMilliseconds", Private).GetValue(scroll) == 60.0, "mouse wheel notches use a gentler response");
         Check(!scroll.HasAnimatedProperties, "quantized bursts use the same frame progression without repeated clocks");
         PumpUntil(() => !(bool)smoothType.GetField("_scrolling", Private).GetValue(scroll));
         scroll.UpdateLayout();

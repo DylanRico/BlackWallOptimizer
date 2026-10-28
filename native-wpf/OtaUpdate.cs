@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -162,6 +163,9 @@ namespace Blackwall
 
     public static class OtaInstaller
     {
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
         public static string Root { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Blackwall", "Updates"); } }
         public static string NewStage()
         {
@@ -199,6 +203,50 @@ namespace Blackwall
                 }
             }
             throw new TimeoutException("El instalador no respondió; Blackwall permanece abierto.");
+        }
+        // This helper stays unelevated and can only replace its own executable through the existing installer.
+        public static int RunPrepared(string[] args)
+        {
+            string stage = null;
+            try
+            {
+                if (OtaProtocol.Elevated() || args.Length != 6 || args[0] != "--ota-prepared" || !Regex.IsMatch(args[3], "^[a-f0-9]{64}$") || !Regex.IsMatch(args[5], "^[a-f0-9]{32}$")) return 2;
+                stage = CheckStage(args[1]);
+                var release = OtaProtocol.Verify(File.ReadAllBytes(Path.Combine(stage, "update.json")), OtaProtocol.PublicKey());
+                if (release.Version != args[2] || release.Hash != args[3] || OtaProtocol.ParseVersion(release.Version) <= OtaProtocol.ParseVersion(Assembly.GetExecutingAssembly().GetName().Version.ToString(3))) throw new InvalidDataException("La actualización preparada no coincide con la aceptada.");
+                OtaProtocol.VerifyBinary(Path.Combine(stage, "Blackwall.exe"), release);
+                IntPtr parent = OpenProcess(0x00100000, false, int.Parse(args[4], CultureInfo.InvariantCulture));
+                if (parent == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "No se puede esperar el cierre de la ventana principal.");
+                try
+                {
+                    if (WaitForSingleObject(parent, 0) != 258) throw new IOException("La ventana principal ya se cerró o no se puede esperar.");
+                    File.WriteAllText(Path.Combine(stage, "prepared-ready"), args[5]);
+                    if (WaitForSingleObject(parent, 30000) != 0) throw new TimeoutException("La ventana principal no se cerró; no se sustituyó el ejecutable.");
+                    if (File.Exists(Path.Combine(stage, "cancelled"))) throw new OperationCanceledException("Actualización cancelada antes del reemplazo.");
+                    Start(stage).GetAwaiter().GetResult();
+                }
+                finally { CloseHandle(parent); }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                if (stage != null) { try { File.WriteAllText(Path.Combine(stage, "prepared-error"), ex.Message); } catch { } }
+                return 1;
+            }
+        }
+
+        // Only known files in the current verified stage are removed; backups and unknown files stay intact.
+        public static void CleanStage(string stage)
+        {
+            string full = CheckStage(stage);
+            foreach (string name in new[] { "update.json", "Blackwall.exe", "worker.exe", "ready", "healthy", "result.txt", "cancelled", "prepared-ready", "prepared-error" })
+            {
+                string file = Path.Combine(full, name);
+                if (!File.Exists(file)) continue;
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("El temporal contiene un enlace.");
+                File.Delete(file);
+            }
+            if (Directory.GetFileSystemEntries(full).Length == 0) Directory.Delete(full);
         }
         // The parent identity supplies the only writable target; a plan cannot choose an arbitrary file.
         public static int Run(string[] args)

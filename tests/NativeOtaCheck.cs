@@ -38,7 +38,7 @@ internal static class NativeOtaCheck
     {
         Directory.CreateDirectory(folder);
         string source = Path.Combine(folder, "Host.cs");
-        File.WriteAllText(source, "using System; using System.Threading; using Blackwall; [assembly:System.Reflection.AssemblyVersion(\"" + version + ".0\")] class Host { static void Main(string[] args) { if(args.Length>0 && args[0]==\"--ota-install\") { Environment.ExitCode=OtaInstaller.Run(args); return; } if(args.Length==2 && args[0]==\"--parent\") { try { OtaInstaller.Start(args[1]).GetAwaiter().GetResult(); } catch { Environment.ExitCode=3; } return; } if(args.Length>0 && args[0]==\"--ota-health\") { " + (fail ? "Environment.ExitCode=4; return;" : "OtaInstaller.ReportHealthy(args); Thread.Sleep(4000);") + " } } }");
+        File.WriteAllText(source, "using System; using System.IO; using System.Threading; using Blackwall; [assembly:System.Reflection.AssemblyVersion(\"" + version + ".0\")] class Host { static void Main(string[] args) { if(args.Length>0 && args[0]==\"--ota-install\") { Environment.ExitCode=OtaInstaller.Run(args); return; } if(args.Length>0 && args[0]==\"--ota-prepared\") { Environment.ExitCode=OtaInstaller.RunPrepared(args); return; } if(args.Length==2 && args[0]==\"--wait\") { for(int i=0;i<600 && !File.Exists(Path.Combine(args[1],\"finish\"));i++) Thread.Sleep(50); return; } if(args.Length==2 && args[0]==\"--parent\") { try { OtaInstaller.Start(args[1]).GetAwaiter().GetResult(); } catch { Environment.ExitCode=3; } return; } if(args.Length>0 && args[0]==\"--ota-health\") { " + (fail ? "Environment.ExitCode=4; return;" : "OtaInstaller.ReportHealthy(args); Thread.Sleep(4000);") + " } } }");
         string compiler = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"Microsoft.NET\Framework64\v4.0.30319\csc.exe");
         string arguments = "/nologo /target:exe /out:" + OtaInstaller.Quote(Path.Combine(folder, "Host.exe")) + " /r:System.Web.Extensions.dll /resource:" + OtaInstaller.Quote(Path.Combine(project, "test-public.xml")) + ",update-public-key.xml" + " /resource:" + OtaInstaller.Quote(Path.Combine(project, "padding.bin")) + ",padding" + " " + OtaInstaller.Quote(source) + " " + OtaInstaller.Quote(Path.Combine(project, "OtaUpdate.cs"));
         using (var process = Process.Start(new ProcessStartInfo(compiler, arguments) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
@@ -79,6 +79,41 @@ internal static class NativeOtaCheck
         }
         Wait(() => File.Exists(Path.Combine(stage, "result.txt")), "Rejected update result timeout");
         Check(File.ReadAllText(Path.Combine(stage, "result.txt")).StartsWith("ERROR:") && OtaProtocol.HashFile(target) == original, cancel ? "Cancelled handoff never mutates the test installation" : "Worker rejects same-version replay before replacement");
+    }
+    private static void PreparedProcessUpdate(string fixture, string candidate, RSACryptoServiceProvider rsa, bool invalid, bool cancel)
+    {
+        string folder = Path.Combine(fixture, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
+        string target = Path.Combine(folder, "Host.exe"); File.Copy(Path.Combine(fixture, "old", "Host.exe"), target);
+        string original = OtaProtocol.HashFile(target), stage = OtaInstaller.NewStage();
+        File.Copy(candidate, Path.Combine(stage, "Blackwall.exe"));
+        File.WriteAllBytes(Path.Combine(stage, "update.json"), Sign(rsa, Payload(candidate, "1.3.1")));
+        string token = Guid.NewGuid().ToString("N");
+        using (var parent = Process.Start(new ProcessStartInfo(target, "--wait " + OtaInstaller.Quote(stage)) { UseShellExecute = false, CreateNoWindow = true }))
+        using (var helper = Process.Start(new ProcessStartInfo(target, "--ota-prepared " + OtaInstaller.Quote(stage) + " 1.3.1 " + (invalid ? new string('a', 64) : OtaProtocol.HashFile(candidate)) + " " + parent.Id + " " + token) { UseShellExecute = false, CreateNoWindow = true }))
+        {
+            if (invalid)
+            {
+                Check(helper.WaitForExit(15000) && helper.ExitCode != 0 && !File.Exists(Path.Combine(stage, "prepared-ready")), "unmatched prepared hash is rejected before closing the original");
+                Check(!parent.HasExited && OtaProtocol.HashFile(target) == original, "rejected prepared handoff leaves the original running and unchanged");
+                File.WriteAllText(Path.Combine(stage, "finish"), "1");
+                Check(parent.WaitForExit(5000), "test parent exits on its own signal");
+                return;
+            }
+            Wait(() => File.Exists(Path.Combine(stage, "prepared-ready")) || helper.HasExited, "Prepared helper readiness timeout");
+            Check(!helper.HasExited && File.ReadAllText(Path.Combine(stage, "prepared-ready")) == token, "prepared helper verifies package before reporting readiness");
+            Check(!parent.HasExited && OtaProtocol.HashFile(target) == original, "original stays running and unchanged while handoff is prepared");
+            if (cancel) File.WriteAllText(Path.Combine(stage, "cancelled"), "1");
+            File.WriteAllText(Path.Combine(stage, "finish"), "1");
+            Check(parent.WaitForExit(5000) && helper.WaitForExit(15000), "prepared helper waits for original to close");
+            if (cancel)
+            {
+                Check(helper.ExitCode != 0 && OtaProtocol.HashFile(target) == original && !File.Exists(Path.Combine(stage, "result.txt")), "cancellation before replacement preserves the original executable");
+                return;
+            }
+            Check(helper.ExitCode == 0, "verified helper launches installer after original exits");
+        }
+        Wait(() => File.Exists(Path.Combine(stage, "result.txt")), "Prepared worker result timeout");
+        Check(File.ReadAllText(Path.Combine(stage, "result.txt")).StartsWith("OK:") && OtaProtocol.HashFile(target) == OtaProtocol.HashFile(candidate), "prepared update installs verified candidate after the original exits");
     }
     private static void Network(string baseUrl, string thumbprint, string folder)
     {
@@ -138,6 +173,12 @@ internal static class NativeOtaCheck
             foreach (string bad in new[] { "http://example.invalid", "https://user:password@example.invalid", "https://example.invalid/#fragment", "file:///C:/test" }) Reject(() => OtaProtocol.Https(bad), "Reject unsafe URL");
             Reject(() => OtaProtocol.Verify(Encoding.UTF8.GetBytes("{\"appVersion\":\"999.0.0\"}"), OtaProtocol.PublicKey()), "Unsigned legacy manifest is rejected");
             Reject(() => OtaProtocol.Verify(new byte[262145], OtaProtocol.PublicKey()), "Oversize manifest rejected before parsing");
+            string cleanupStage = OtaInstaller.NewStage();
+            File.WriteAllText(Path.Combine(cleanupStage, "update.json"), "fixture");
+            File.WriteAllText(Path.Combine(cleanupStage, "unknown-user-file.txt"), "keep");
+            OtaInstaller.CleanStage(cleanupStage);
+            Check(!File.Exists(Path.Combine(cleanupStage, "update.json")) && File.Exists(Path.Combine(cleanupStage, "unknown-user-file.txt")), "cleanup deletes only known stage files and preserves unknown content");
+            File.Delete(Path.Combine(cleanupStage, "unknown-user-file.txt")); Directory.Delete(cleanupStage);
             using (var rsa = new RSACryptoServiceProvider(3072))
             {
                 rsa.PersistKeyInCsp = false;
@@ -168,6 +209,9 @@ internal static class NativeOtaCheck
                 CompileHost(hostFixture, Path.Combine(hostFixture, "bad"), "1.3.1", true);
                 ProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, true);
                 ProcessUpdate(hostFixture, Path.Combine(hostFixture, "bad", "Host.exe"), rsa, false);
+                PreparedProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, false, false);
+                PreparedProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, false, true);
+                PreparedProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, true, false);
                 RejectedProcessUpdate(hostFixture, Path.Combine(hostFixture, "old", "Host.exe"), rsa, "1.3.0", false);
                 RejectedProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, "1.3.1", true);
             }

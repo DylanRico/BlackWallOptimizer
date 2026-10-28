@@ -17,7 +17,7 @@ $required = @(
     @{ path = Join-Path $framework 'csc.exe'; hint = 'Activa .NET Framework 4.8 en Caracteristicas de Windows.' },
     @{ path = Join-Path $projectRoot 'native-wpf\BlackwallApp.cs'; hint = 'Restaura el codigo fuente WPF.' },
     @{ path = Join-Path $projectRoot 'native-wpf\OtaUpdate.cs'; hint = 'Restaura el codigo fuente WPF.' },
-    @{ path = Join-Path $projectRoot 'src-tauri\icons\icon.ico'; hint = 'Regenera el icono con scripts\New-AppIcon.ps1.' },
+    @{ path = Join-Path $projectRoot 'assets\app.ico'; hint = 'Regenera el icono con scripts\New-AppIcon.ps1.' },
     @{ path = Join-Path $projectRoot 'assets\icons\blackwall-mark.png'; hint = 'Regenera el icono con scripts\New-AppIcon.ps1.' },
     @{ path = Join-Path $projectRoot 'assets\update-public-key.xml'; hint = 'Restaura la clave publica OTA del repositorio.' }
 ) + ($referenceNames | ForEach-Object { @{ path = Join-Path $framework $_; hint = 'Activa .NET Framework 4.8 y WPF en Caracteristicas de Windows.' } }) +
@@ -53,7 +53,7 @@ try {
     $versionSource = Join-Path $buildFolder 'BuildVersion.cs'
     [IO.File]::WriteAllText($versionSource, ('[assembly: System.Reflection.AssemblyVersion("' + $peVersion + '")][assembly: System.Reflection.AssemblyFileVersion("' + $peVersion + '")]'))
     $references = $referenceNames | ForEach-Object { '/r:' + (Join-Path $framework $_) }
-    $compileArgs = @('/nologo', '/target:winexe', '/optimize+', "/out:$stagedExe", ('/win32icon:' + (Join-Path $projectRoot 'src-tauri\icons\icon.ico'))) + $references
+    $compileArgs = @('/nologo', '/target:winexe', '/optimize+', "/out:$stagedExe", ('/win32icon:' + (Join-Path $projectRoot 'assets\app.ico'))) + $references
     $resources = @()
     foreach ($catalog in @('tweaks', 'apps', 'version')) {
         $catalogPath = Join-Path $projectRoot "catalogs\$catalog.json"

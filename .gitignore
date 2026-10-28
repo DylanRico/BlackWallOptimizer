@@ -5,13 +5,12 @@
 *.new
 *.bak
 
-# Si se usa dev-bridge o webview
-node_modules/
-dist/
-.cache/
+# Documentación interna: solo README.md se publica
+*.md
+!/README.md
+
+# Salidas de compilación y pruebas
 artifacts/
-target/
-src-tauri/target/
 .vs/
 .vscode/
 .idea/
