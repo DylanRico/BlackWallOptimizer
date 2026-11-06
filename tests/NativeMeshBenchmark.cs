@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
@@ -21,13 +22,23 @@ internal static class NativeMeshBenchmark
     private static void Main(string[] args)
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        if (args.Length > 1 && args[1] == "--verify-links")
+        {
+            VerifyLinks(args);
+            app.Shutdown();
+            return;
+        }
         Type type = Assembly.LoadFrom(Path.GetFullPath(args[0])).GetType("Blackwall.MainWindow", true);
         var window = (Window)Activator.CreateInstance(type, new object[] { Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0])), "benchmark-unused-preferences.json") });
         ((DispatcherTimer)type.GetField("_scriptMonitorTimer", Flags).GetValue(window)).Stop();
+        NativePerformanceFixture.Prepare(type, window);
         object loaded = type.GetField("_loadedModules", Flags).GetValue(window);
         foreach (string module in new[] { "hardware", "tweaks", "apps", "monitor", "safety" }) loaded.GetType().GetMethod("Add").Invoke(loaded, new object[] { module });
-        type.GetField("_activeTab", Flags).SetValue(window, args.Length > 1 ? args[1] : "optimization");
+        string tab = args.Length > 1 ? args[1] : "winutil";
+        if (!new[] { "hardware", "winutil", "ceito", "apps", "monitor", "safety" }.Contains(tab)) throw new ArgumentException("Unknown tab: " + tab);
+        type.GetField("_activeTab", Flags).SetValue(window, tab);
         type.GetMethod("RenderCurrentTab", Flags).Invoke(window, null);
+        if (tab == "winutil") NativePerformanceFixture.RequireCards(type, window);
         var root = (FrameworkElement)window.Content; window.Content = null; root.Resources.MergedDictionaries.Add(window.Resources);
         object network = type.GetField("_network", Flags).GetValue(window);
         Type netType = network.GetType();
@@ -70,6 +81,41 @@ internal static class NativeMeshBenchmark
             netType.GetMethod("SetRunning").Invoke(network, new object[] { false });
         }
         window.Close(); app.Shutdown();
+    }
+
+    private static void VerifyLinks(string[] args)
+    {
+        Point[] fixedPoints = { new Point(50, 50), new Point(100, 80), new Point(215, 50), new Point(214.999, 50), new Point(215.001, 50), new Point(50, 200) };
+        for (int i = 0; i < fixedPoints.Length; i++)
+            for (int j = i + 1; j < fixedPoints.Length; j++)
+            {
+                double dx = fixedPoints[i].X - fixedPoints[j].X, dy = fixedPoints[i].Y - fixedPoints[j].Y;
+                double squared = dx * dx + dy * dy, distance = Math.Sqrt(squared), link = 165;
+                bool before = distance < link, after = squared < link * link && distance < link;
+                if (before != after) throw new InvalidOperationException("Fixed-point link set changed.");
+            }
+        Type type = Assembly.LoadFrom(Path.GetFullPath(args[0])).GetType("Blackwall.GraphiteNetwork", true);
+        var network = (FrameworkElement)Activator.CreateInstance(type);
+        using (var host = new HwndSource(new HwndSourceParameters("Blackwall fixed mesh check") { Width = 600, Height = 400, PositionX = -12000, PositionY = -12000, WindowStyle = unchecked((int)0x90000000) }))
+        {
+            host.RootVisual = network;
+            Pump(150);
+            var points = (Point[])type.GetField("_points", Flags).GetValue(network);
+            for (int i = 0; i < points.Length; i++)
+            {
+                Point p = i < fixedPoints.Length ? fixedPoints[i] : new Point(1000 + 300 * i, 1000);
+                points[i] = new Point(p.X / network.ActualWidth, p.Y / network.ActualHeight);
+            }
+            type.GetMethod("Redraw", Flags).Invoke(network, null);
+            var pixels = (int[])type.GetField("_buffer", Flags).GetValue(network);
+            var bytes = new byte[pixels.Length * sizeof(int)];
+            Buffer.BlockCopy(pixels, 0, bytes, 0, bytes.Length);
+            string hash;
+            using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+            bool matches = args.Length < 3 || hash == args[2];
+            Console.WriteLine((matches ? "PASS" : "FAIL") + ": fixed mesh pixels " + hash);
+            if (!matches) Environment.ExitCode = 1;
+        }
     }
 
     static void Pump(int milliseconds)

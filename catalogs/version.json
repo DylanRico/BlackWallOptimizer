@@ -1,15 +1,19 @@
 {
-  "appVersion": "1.4.7",
+  "appVersion": "1.5.0",
   "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
   "changelog": [
-    "Fondo de malla roja nítido a la resolución real de la pantalla, a 60 fps al mover el cursor y con menos consumo en reposo.",
-    "Exportación de informes del equipo en HTML, Excel, Markdown, texto, CSV y JSON, con secciones definidas y opción para ocultar datos identificativos.",
-    "Actualizaciones: la app sigue visible durante la descarga y verificación, con progreso real y cancelación.",
-    "El reinicio de una actualización espera a que terminen las tareas en curso antes del reemplazo seguro.",
-    "Las notas de la versión instalada siguen visibles y las novedades de una versión nueva se muestran aparte.",
-    "Aviso automático de actualización más discreto, para revisar los cambios cuando quieras.",
-    "Limpieza de temporales de actualizaciones terminadas sin borrar los respaldos de recuperación.",
-    "Reflejos plata y brasa en botones, tarjetas y buscador.",
-    "Barra de estado y progreso de descargas sin bloquear las tareas en segundo plano."
+    "Versión corregida de los fallos de 1.4.x: cada ajuste guarda el valor real anterior, se verifica al aplicarse y «Revertir» lo restablece de verdad.",
+    "Nueva sección WinUtil (Esenciales, Avanzados, Energía y Preferencias) con perfiles Mínimo, Recomendado y Completo que solo marcan lo que se aplicará; nada cambia hasta que lo confirmas.",
+    "Preferencias de Windows agrupadas y aplicadas con un botón; las que necesitan reiniciar lo avisan y se comprueban antes de reiniciar.",
+    "Ceito queda en pausa: solo permite revertir ajustes antiguos, con un asistente de 3 pasos.",
+    "Nuevo ajuste «Quitar apps preinstaladas de Microsoft» (17 apps, entre ellas Copilot, Noticias, El tiempo, Clipchamp y Microsoft 365). Conserva la Store, la Calculadora y Xbox; «Revertir» las reinstala desde Microsoft Store.",
+    "Planes de energía más seguros: «Reparar plan» crea una copia propia del Equilibrado con el procesador al 100 %, guarda copia de los planes antes de cambiarlos y se deshace sola si algo falla.",
+    "Si un plan de energía ya no existe al revertir, se recupera desde su copia; si no hay copia, lo dice claramente.",
+    "Hardware: nuevo indicador de solo lectura «Certificados 2023» de Secure Boot, con aviso de actualizar la BIOS desde la web del fabricante.",
+    "Hardware: la caché L2 y L3 del procesador se muestra en MB.",
+    "Telemetría de PowerShell desactivada dentro del ajuste de telemetría, reversible.",
+    "Actualizaciones más seguras: recupera la versión anterior si una actualización se cortó a medias y el estado se guarda de forma duradera.",
+    "Más fluidez: Ceito deja de animarse cuando no se ve (de 33 % a 3,6 % de CPU), Actividad no consulta procesos con la ventana oculta y pulsar la pestaña activa ya no recarga la página.",
+    "Comprobado que ningún ajuste toca la BIOS, UEFI, Secure Boot, BCD, TPM ni BitLocker."
   ]
 }

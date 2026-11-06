@@ -72,7 +72,16 @@ namespace Blackwall
                 if (rsa.KeySize < 3072 || !rsa.PublicOnly || !rsa.VerifyData(payload, "SHA256", signature)) throw new InvalidDataException("Firma OTA no válida.");
             }
             var data = Json.Deserialize<Dictionary<string, object>>(new UTF8Encoding(false, true).GetString(payload));
-            Keys(data, "schemaVersion", "appVersion", "binary", "changelog");
+            if (data != null && data.ContainsKey("expires"))
+            {
+                Keys(data, "schemaVersion", "appVersion", "binary", "changelog", "expires");
+                DateTime expires;
+                string expiration = data["expires"] as string;
+                if (!DateTime.TryParseExact(expiration, new[] { "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'" }, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out expires))
+                    throw new InvalidDataException("La fecha de caducidad OTA no es válida; se requiere una fecha UTC ISO-8601.");
+                if (expires <= DateTime.UtcNow) throw new InvalidDataException("El manifiesto de actualización ha caducado.");
+            }
+            else Keys(data, "schemaVersion", "appVersion", "binary", "changelog");
             if (!(data["schemaVersion"] is int) || (int)data["schemaVersion"] != 1) throw new InvalidDataException("Formato OTA no compatible.");
             string version = (string)data["appVersion"];
             ParseVersion(version);
@@ -307,6 +316,73 @@ namespace Blackwall
                 return 1;
             }
         }
+        private static void RejectReparse(string path)
+        {
+            string current = Path.GetFullPath(path);
+            while (!String.IsNullOrEmpty(current))
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Se rechazó un enlace en la ruta OTA.");
+                string parent = Path.GetDirectoryName(current);
+                if (String.IsNullOrEmpty(parent) || parent == current) break;
+                current = parent;
+            }
+        }
+        private static void WriteState(string journal, string state, string backup, string previousHash, string version)
+        {
+            string temp = journal + ".tmp." + Guid.NewGuid().ToString("N");
+            try
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(OtaProtocol.Json.Serialize(new { state = state, backup = backup, previousHash = previousHash, version = version }));
+                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { stream.Write(bytes, 0, bytes.Length); stream.Flush(true); }
+                if (File.Exists(journal)) { RejectReparse(journal); File.Replace(temp, journal, null); }
+                else File.Move(temp, journal);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+        public static string RecoverInterrupted(string executable)
+        {
+            string target = Path.GetFullPath(executable), journal = target + ".ota-state.json";
+            if (!File.Exists(journal)) return null;
+            try
+            {
+                RejectReparse(target); RejectReparse(journal);
+                if (new FileInfo(journal).Length > 16384) throw new InvalidDataException("Estado OTA demasiado grande.");
+                var data = OtaProtocol.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(journal));
+                if (data == null || !data.ContainsKey("state") || !(data["state"] is string)) throw new InvalidDataException("Estado OTA inválido.");
+                string state = (string)data["state"];
+                if (state == "healthy" || state == "rolled-back") return null;
+                if (state != "prepared" && state != "installed") throw new InvalidDataException("Fase OTA desconocida.");
+                if (!data.ContainsKey("backup") || !(data["backup"] is string) || !data.ContainsKey("previousHash") || !(data["previousHash"] is string)) throw new InvalidDataException("Faltan datos verificables del respaldo.");
+                string backup = (string)data["backup"], hash = (string)data["previousHash"];
+                if (!Regex.IsMatch(hash, "^[a-fA-F0-9]{64}$") || !Path.IsPathRooted(backup) || !Path.GetFullPath(backup).StartsWith(target + ".previous.", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Ruta o hash del respaldo inválido.");
+                string suffix = Path.GetFullPath(backup).Substring((target + ".previous.").Length);
+                if (!Regex.IsMatch(suffix, "^[a-fA-F0-9]{32}$")) throw new InvalidDataException("Nombre del respaldo inválido.");
+                if (File.Exists(backup)) RejectReparse(backup);
+                string lockPath = target + ".ota.lock";
+                if (File.Exists(lockPath)) RejectReparse(lockPath);
+                using (var installLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    // Cut before the swap: the executable is still the previous version, so there is nothing to restore.
+                    if (String.Equals(OtaProtocol.HashFile(target), hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        WriteState(journal, "rolled-back", backup, hash, data.ContainsKey("version") && data["version"] is string ? (string)data["version"] : "");
+                        return null;
+                    }
+                    if (!String.Equals(OtaProtocol.HashFile(backup), hash, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("El hash del respaldo no coincide.");
+                    string copy = target + ".recovery." + Guid.NewGuid().ToString("N");
+                    try
+                    {
+                        File.Copy(backup, copy, false);
+                        if (!String.Equals(OtaProtocol.HashFile(copy), hash, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("La copia del respaldo no coincide.");
+                        File.Replace(copy, target, target + ".failed." + Guid.NewGuid().ToString("N"));
+                        WriteState(journal, "rolled-back", backup, hash, data.ContainsKey("version") && data["version"] is string ? (string)data["version"] : "");
+                    }
+                    finally { if (File.Exists(copy)) File.Delete(copy); }
+                }
+                return "Se recuperó la versión anterior tras una actualización interrumpida. Reinicia Blackwall para usarla.";
+            }
+            catch (Exception ex) { return "No se pudo completar la recuperación OTA. Revisa el ejecutable y el respaldo antes de continuar: " + ex.Message; }
+        }
         public static void Apply(string payload, string target, OtaRelease release, Func<string, bool> healthy)
         {
             using (var installLock = new FileStream(target + ".ota.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
@@ -318,7 +394,8 @@ namespace Blackwall
             File.Copy(payload, pending, false);
             bool replaced = false;
             string journal = target + ".ota-state.json";
-            Action<string> record = state => File.WriteAllText(journal, OtaProtocol.Json.Serialize(new { state = state, backup = backup, previousHash = File.Exists(backup) ? OtaProtocol.HashFile(backup) : OtaProtocol.HashFile(target), version = release.Version }));
+            string previousHash = OtaProtocol.HashFile(target);
+            Action<string> record = state => WriteState(journal, state, backup, previousHash, release.Version);
             try
             {
                 OtaProtocol.VerifyBinary(pending, release);

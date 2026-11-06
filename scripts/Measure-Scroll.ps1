@@ -4,7 +4,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $output = Join-Path $root 'artifacts\NativeScrollBenchmark.exe'
 $references = @('WPF\PresentationFramework.dll', 'WPF\PresentationCore.dll', 'WPF\WindowsBase.dll', 'System.Xaml.dll') | ForEach-Object { '/r:' + (Join-Path $framework $_) }
-& (Join-Path $framework 'csc.exe') '/nologo' '/target:exe' "/out:$output" @references (Join-Path $root 'tests\NativeScrollBenchmark.cs')
+& (Join-Path $framework 'csc.exe') '/nologo' '/target:exe' "/out:$output" @references (Join-Path $root 'tests\NativePerformanceFixture.cs') (Join-Path $root 'tests\NativeScrollBenchmark.cs')
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar el benchmark de entrada.' }
 $measurements = @()
 for ($trial = 1; $trial -le $Trials; $trial++) {

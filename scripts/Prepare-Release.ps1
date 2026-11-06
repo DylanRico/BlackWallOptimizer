@@ -1,9 +1,22 @@
 param(
     [string]$Version = $env:BLACKWALL_RELEASE_VERSION,
     [string]$BaseUrl = 'https://github.com/DylanRico/BlackWallOptimizer/releases/download',
-    [string]$PrivateKeyPath = (Join-Path $env:LOCALAPPDATA 'BlackwallPublisher\update-signing.dpapi')
+    [string]$PrivateKeyPath = (Join-Path $env:LOCALAPPDATA 'BlackwallPublisher\update-signing.dpapi'),
+    [switch]$AllowDirty
 )
 $ErrorActionPreference = 'Stop'
+function Test-ReleaseGates([string]$ProjectRoot, [bool]$AllowChanges) {
+    & (Join-Path $ProjectRoot 'scripts/Test-Ui.ps1')
+    if (-not $?) { throw 'Fallaron las pruebas UI.' }
+    & (Join-Path $ProjectRoot 'scripts/Test-Ota.ps1')
+    if (-not $?) { throw 'Fallaron las pruebas OTA.' }
+    & node (Join-Path $ProjectRoot 'scripts/check-publish-safety.mjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Fallo la comprobacion de seguridad de publicacion.' }
+    $changes = @(git -C $ProjectRoot status --porcelain --untracked-files=no -- native-wpf/ catalogs/ scripts/ tests/ assets/)
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo comprobar el estado de Git.' }
+    if ($changes.Count -gt 0 -and -not $AllowChanges) { throw 'Hay cambios en archivos versionados; no se firmara el paquete.' }
+}
+
 Add-Type -AssemblyName System.Security
 $root = Split-Path -Parent $PSScriptRoot
 if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Version no valida.' }
@@ -15,7 +28,7 @@ if (Test-Path -LiteralPath $release) { throw 'Esa version ya esta preparada. Con
 $metadata = Get-Content -LiteralPath (Join-Path $root 'catalogs\version.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($metadata.appVersion -ne $Version) { throw "catalogs\version.json declara $($metadata.appVersion). Actualiza appVersion y changelog a $Version antes de preparar el paquete." }
 if (-not @($metadata.changelog).Count) { throw 'catalogs\version.json no contiene notas (changelog) para firmar.' }
-if (-not (Test-Path -LiteralPath $PrivateKeyPath)) { throw 'Primero ejecuta scripts\Initialize-UpdateKey.ps1 en el equipo publicador.' }
+if (-not $AllowDirty -and -not (Test-Path -LiteralPath $PrivateKeyPath)) { throw 'Primero ejecuta scripts\Initialize-UpdateKey.ps1 en el equipo publicador.' }
 
 # Build and validate before the private key is decrypted: detectable build failures never touch it.
 $staging = Join-Path $root ('artifacts\release-staging\' + [Guid]::NewGuid().ToString('N'))
@@ -25,6 +38,8 @@ $rsa.PersistKeyInCsp = $false
 try {
     $exe = Join-Path $staging 'Blackwall.exe'
     & (Join-Path $PSScriptRoot 'Build-Native.ps1') -OutputPath $exe -Version $Version
+    Test-ReleaseGates $root ([bool]$AllowDirty)
+    if ($AllowDirty) { Write-Output 'Ensayo local completado; no se ha firmado ningun paquete.'; return }
     $assembly = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($exe))
     $protocol = $assembly.GetType('Blackwall.OtaProtocol', $true)
     $binaryHash = $protocol.GetMethod('HashFile').Invoke($null, @($exe.PSObject.BaseObject))

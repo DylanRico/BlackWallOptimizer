@@ -115,6 +115,48 @@ internal static class NativeOtaCheck
         Wait(() => File.Exists(Path.Combine(stage, "result.txt")), "Prepared worker result timeout");
         Check(File.ReadAllText(Path.Combine(stage, "result.txt")).StartsWith("OK:") && OtaProtocol.HashFile(target) == OtaProtocol.HashFile(candidate), "prepared update installs verified candidate after the original exits");
     }
+    private static void Recovery(string fixture)
+    {
+        var recover = typeof(OtaInstaller).GetMethod("RecoverInterrupted");
+        Check(recover != null, "Interrupted OTA recovery is available at startup");
+        string folder = Path.Combine(fixture, "recovery"); Directory.CreateDirectory(folder);
+        string target = Path.Combine(folder, "app.exe"), backup = target + ".previous." + Guid.NewGuid().ToString("N");
+        string state = target + ".ota-state.json";
+        Action<string, string, string> write = (status, path, expectedHash) => File.WriteAllText(state, OtaProtocol.Json.Serialize(new { state = status, backup = path, previousHash = expectedHash, version = "1.4.7" }));
+        Func<string> run = () => (string)recover.Invoke(null, new object[] { target });
+        File.WriteAllText(target, "new"); File.WriteAllText(backup, "previous");
+        string hash = OtaProtocol.HashFile(backup);
+        write("installed", backup, new string('a', 64));
+        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new" && File.Exists(backup), "Mismatched backup is reported and left intact");
+        write("installed", Path.Combine(fixture, Path.GetFileName(backup)), hash);
+        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Backup outside the executable directory is rejected");
+        write("healthy", backup, hash);
+        Check(run() == null && File.ReadAllText(target) == "new", "Healthy state is not rolled back");
+        write("installed", backup, hash);
+        using (var locked = File.Open(target + ".ota.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Active installation is not interrupted");
+        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "previous", "Interrupted installation restores matching previous bytes");
+        Check(File.ReadAllText(state).Contains("rolled-back"), "Recovery records rolled-back state");
+        // Cut before the swap: the executable is still the previous version and no backup exists yet. Nothing to
+        // recover, and the warning must not come back on every start.
+        string never = target + ".previous." + Guid.NewGuid().ToString("N");
+        write("prepared", never, OtaProtocol.HashFile(target));
+        Check(run() == null && File.ReadAllText(target) == "previous" && File.ReadAllText(state).Contains("rolled-back") && run() == null, "An update cut before the swap is closed quietly, once");
+        string live = Path.Combine(folder, "live.exe"), liveBackup = live + ".previous." + Guid.NewGuid().ToString("N"), result = Path.Combine(folder, "live-result.txt");
+        File.Copy(Process.GetCurrentProcess().MainModule.FileName, live); File.WriteAllText(liveBackup, "previous live executable");
+        File.WriteAllText(live + ".ota-state.json", OtaProtocol.Json.Serialize(new { state = "installed", backup = liveBackup, previousHash = OtaProtocol.HashFile(liveBackup), version = "1.4.7" }));
+        using (var child = Process.Start(new ProcessStartInfo(live, "--recovery-process " + OtaInstaller.Quote(result)) { UseShellExecute = false, CreateNoWindow = true }))
+            Check(child.WaitForExit(10000) && child.ExitCode == 0 && File.Exists(result) && File.ReadAllText(result).StartsWith("Se recuperó") && File.ReadAllText(live) == "previous live executable", "Recovery replaces a running executable and reports restart");
+        string real = Path.Combine(fixture, "reparse-real"), link = Path.Combine(fixture, "reparse-link"); Directory.CreateDirectory(real);
+        using (var junction = Process.Start(new ProcessStartInfo("cmd.exe", "/c mklink /J " + OtaInstaller.Quote(link) + " " + OtaInstaller.Quote(real)) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
+            Check(junction.WaitForExit(10000) && junction.ExitCode == 0, "Create isolated junction for reparse check");
+        string linkedTarget = Path.Combine(link, "app.exe"), linkedBackup = linkedTarget + ".previous." + Guid.NewGuid().ToString("N");
+        File.WriteAllText(linkedTarget, "new"); File.WriteAllText(linkedBackup, "previous");
+        File.WriteAllText(linkedTarget + ".ota-state.json", OtaProtocol.Json.Serialize(new { state = "installed", backup = linkedBackup, previousHash = OtaProtocol.HashFile(linkedBackup), version = "1.4.7" }));
+        Check(!String.IsNullOrEmpty((string)recover.Invoke(null, new object[] { linkedTarget })) && File.ReadAllText(linkedTarget) == "new" && File.Exists(linkedBackup), "A reparse-point ancestor is reported without replacing the executable");
+        File.WriteAllText(target, "new"); File.WriteAllText(state, "{broken");
+        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Malformed state is reported without modifying the executable");
+    }
     private static void Network(string baseUrl, string thumbprint, string folder)
     {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
@@ -163,6 +205,7 @@ internal static class NativeOtaCheck
                 }
                 return 0;
             }
+            if (args.Length == 2 && args[0] == "--recovery-process") { File.WriteAllText(args[1], OtaInstaller.RecoverInterrupted(Process.GetCurrentProcess().MainModule.FileName) ?? ""); return 0; }
             if (args.Length == 4 && args[0] == "--network") { Network(args[1], args[2], args[3]); Console.WriteLine("PASS: " + checks + " OTA HTTPS/Postman checks."); return 0; }
             string package = Path.GetFullPath(args[0]), project = Path.GetFullPath(args[1]), fixture = Path.GetFullPath(args[2]); Directory.CreateDirectory(fixture);
             byte[] envelope = File.ReadAllBytes(Path.Combine(package, "update.json"));
@@ -173,6 +216,19 @@ internal static class NativeOtaCheck
             foreach (string bad in new[] { "http://example.invalid", "https://user:password@example.invalid", "https://example.invalid/#fragment", "file:///C:/test" }) Reject(() => OtaProtocol.Https(bad), "Reject unsafe URL");
             Reject(() => OtaProtocol.Verify(Encoding.UTF8.GetBytes("{\"appVersion\":\"999.0.0\"}"), OtaProtocol.PublicKey()), "Unsigned legacy manifest is rejected");
             Reject(() => OtaProtocol.Verify(new byte[262145], OtaProtocol.PublicKey()), "Oversize manifest rejected before parsing");
+            using (var expiryKey = new RSACryptoServiceProvider(3072))
+            {
+                expiryKey.PersistKeyInCsp = false;
+                var expiryData = Payload(payload, release.Version);
+                expiryData["expires"] = "2000-01-01T00:00:00Z";
+                RejectWith(() => OtaProtocol.Verify(Sign(expiryKey, expiryData), expiryKey.ToXmlString(false)), ex => ex is InvalidDataException && ex.Message.Contains("caduc"), "Expired signed manifest is rejected with a clear message");
+                expiryData["expires"] = "2999-01-01T00:00:00Z";
+                Check(OtaProtocol.Verify(Sign(expiryKey, expiryData), expiryKey.ToXmlString(false)).Hash == release.Hash, "Unexpired signed manifest is accepted");
+                expiryData["expires"] = "2999-01-01";
+                Reject(() => OtaProtocol.Verify(Sign(expiryKey, expiryData), expiryKey.ToXmlString(false)), "Expiry must be an ISO-8601 UTC timestamp");
+            }
+            if (args.Length == 4 && args[3] == "--manifest-only") { Console.WriteLine("PASS: " + checks + " OTA manifest checks."); return 0; }
+            Recovery(fixture);
             string cleanupStage = OtaInstaller.NewStage();
             File.WriteAllText(Path.Combine(cleanupStage, "update.json"), "fixture");
             File.WriteAllText(Path.Combine(cleanupStage, "unknown-user-file.txt"), "keep");
@@ -192,7 +248,11 @@ internal static class NativeOtaCheck
                 data["unknown"] = true; Reject(() => OtaProtocol.Verify(Sign(rsa, data), rsa.ToXmlString(false)), "Unknown schema fields rejected"); data.Remove("unknown");
                 string tampered = Path.Combine(fixture, "tampered.exe"); File.Copy(payload, tampered); using (var file = File.Open(tampered, FileMode.Open, FileAccess.ReadWrite)) { file.Position = 500; int value = file.ReadByte(); file.Position = 500; file.WriteByte((byte)(value ^ 255)); }
                 Reject(() => OtaProtocol.VerifyBinary(tampered, release), "Corrupt executable is rejected");
-                string target = Path.Combine(fixture, "target.exe"); File.Copy(Path.Combine(project, "Blackwall.exe"), target); string original = OtaProtocol.HashFile(target);
+                string hostFixture = Path.Combine(fixture, "hosts"); Directory.CreateDirectory(hostFixture);
+                File.WriteAllText(Path.Combine(hostFixture, "test-public.xml"), rsa.ToXmlString(false)); File.WriteAllBytes(Path.Combine(hostFixture, "padding.bin"), new byte[65536]); File.Copy(Path.Combine(project, "native-wpf", "OtaUpdate.cs"), Path.Combine(hostFixture, "OtaUpdate.cs"));
+                CompileHost(hostFixture, Path.Combine(hostFixture, "old"), "1.3.0", false);
+                // An older disposable host stands in for the installation, so the check never depends on the project's own Blackwall.exe version.
+                string target = Path.Combine(fixture, "target.exe"); File.Copy(Path.Combine(hostFixture, "old", "Host.exe"), target); string original = OtaProtocol.HashFile(target);
                 Reject(() => OtaInstaller.Apply(payload, target, release, candidate => false), "Failed health check triggers rollback");
                 Check(OtaProtocol.HashFile(target) == original, "Rollback preserves the exact previous executable");
                 using (var locked = File.Open(target + ".ota.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) Reject(() => OtaInstaller.Apply(payload, target, release, candidate => true), "Concurrent installation is rejected");
@@ -202,9 +262,6 @@ internal static class NativeOtaCheck
                 OtaInstaller.Apply(payload, target, release, candidate => true); Check(OtaProtocol.HashFile(target) == release.Hash, "Successful transaction installs the verified bytes");
                 Reject(() => OtaInstaller.Apply(payload, target, release, candidate => true), "Same-version reinstallation is rejected");
                 Check(Directory.GetFiles(fixture, "target.exe.previous.*").Length == 1, "Successful transaction retains previous backup");
-                string hostFixture = Path.Combine(fixture, "hosts"); Directory.CreateDirectory(hostFixture);
-                File.WriteAllText(Path.Combine(hostFixture, "test-public.xml"), rsa.ToXmlString(false)); File.WriteAllBytes(Path.Combine(hostFixture, "padding.bin"), new byte[65536]); File.Copy(Path.Combine(project, "native-wpf", "OtaUpdate.cs"), Path.Combine(hostFixture, "OtaUpdate.cs"));
-                CompileHost(hostFixture, Path.Combine(hostFixture, "old"), "1.3.0", false);
                 CompileHost(hostFixture, Path.Combine(hostFixture, "good"), "1.3.1", false);
                 CompileHost(hostFixture, Path.Combine(hostFixture, "bad"), "1.3.1", true);
                 ProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, true);

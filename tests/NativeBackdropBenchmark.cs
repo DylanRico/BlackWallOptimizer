@@ -24,10 +24,12 @@ internal static class NativeBackdropBenchmark
         Type type = Assembly.LoadFrom(Path.GetFullPath(args[0])).GetType("Blackwall.MainWindow", true);
         var window = (Window)Activator.CreateInstance(type, new object[] { Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0])), "benchmark-unused-preferences.json") });
         ((DispatcherTimer)type.GetField("_scriptMonitorTimer", Flags).GetValue(window)).Stop();
-        type.GetField("_activeTab", Flags).SetValue(window, "optimization");
+        NativePerformanceFixture.Prepare(type, window);
+        type.GetField("_activeTab", Flags).SetValue(window, "winutil");
         object loaded = type.GetField("_loadedModules", Flags).GetValue(window);
         loaded.GetType().GetMethod("Add").Invoke(loaded, new object[] { "tweaks" });
         type.GetMethod("RenderCurrentTab", Flags).Invoke(window, null);
+        NativePerformanceFixture.RequireCards(type, window);
         var root = (Border)type.GetField("_rootBorder", Flags).GetValue(window);
         var status = (TextBlock)type.GetField("_statusText", Flags).GetValue(window);
         window.Content = null;

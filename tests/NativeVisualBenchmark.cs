@@ -40,20 +40,22 @@ internal static class NativeVisualBenchmark
             image.Render(content);
             watch.Stop();
             long startupCpu = (long)(process.TotalProcessorTime - cpu).TotalMilliseconds;
+            NativePerformanceFixture.Prepare(type, window);
             foreach (string module in new[] { "tweaks", "apps", "monitor", "safety" }) loaded.GetType().GetMethod("Add").Invoke(loaded, new object[] { module });
             Stopwatch navigation = Stopwatch.StartNew();
             for (int iteration = 0; iteration < (lifetime ? 17 : 5); iteration++)
-                foreach (string tab in new[] { "hardware", "optimization", "debloat", "apps", "monitor", "safety" })
+                foreach (string tab in new[] { "hardware", "winutil", "ceito", "apps", "monitor", "safety" })
                 {
                     if (lifetime) oldPages.Add(new WeakReference(ViewerPage(type, window, flags)));
                     type.GetField("_activeTab", flags).SetValue(window, tab);
                     type.GetMethod("RenderCurrentTab", flags).Invoke(window, null);
+                    if (tab == "winutil") NativePerformanceFixture.RequireCards(type, window);
                     content.Measure(new Size(1400, 880));
                     content.Arrange(new Rect(0, 0, 1400, 880));
                     content.UpdateLayout();
                 }
             navigation.Stop();
-            type.GetField("_activeTab", flags).SetValue(window, "optimization");
+            type.GetField("_activeTab", flags).SetValue(window, "winutil");
             type.GetMethod("RenderCurrentTab", flags).Invoke(window, null);
             content.Measure(new Size(1400, 880)); content.Arrange(new Rect(0, 0, 1400, 880)); content.UpdateLayout();
             var searchDurations = new List<double>();

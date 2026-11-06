@@ -25,11 +25,12 @@ internal static class NativeScrollBenchmark
         var window = (Window)Activator.CreateInstance(type, new object[] { Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0])), "benchmark-unused-preferences.json") });
         ((DispatcherTimer)type.GetField("_scriptMonitorTimer", flags).GetValue(window)).Stop();
         type.GetField("_reduceMotion", flags).SetValue(window, true);
-        type.GetField("_activeTab", flags).SetValue(window, "optimization");
-        type.GetField("_optDeviceScope", flags).SetValue(window, "all");
+        NativePerformanceFixture.Prepare(type, window);
+        type.GetField("_activeTab", flags).SetValue(window, "winutil");
         object loaded = type.GetField("_loadedModules", flags).GetValue(window);
         loaded.GetType().GetMethod("Add").Invoke(loaded, new object[] { "tweaks" });
         type.GetMethod("RenderCurrentTab", flags).Invoke(window, null);
+        NativePerformanceFixture.RequireCards(type, window);
         var scroll = (ScrollViewer)type.GetField("_mainScroll", flags).GetValue(window);
         ((Panel)scroll.Parent).Children.Remove(scroll);
         scroll.Resources = window.Resources;
@@ -82,14 +83,14 @@ internal static class NativeScrollBenchmark
             }
             finally { timer.Stop(); CompositionTarget.Rendering -= rendered; }
             if (index != 160 || scroll.VerticalOffset < 0 || scroll.VerticalOffset > scroll.ScrollableHeight) throw new InvalidOperationException("Input was lost or escaped bounds.");
-            Console.WriteLine("{\"events\":" + index + ",\"frames\":" + intervals.Count + ",\"renderEventP95Ms\":" + P95(intervals) + ",\"handlerP95Ms\":" + P95(handlerTimes) + ",\"offsetStepP95\":" + P95(jumps) + ",\"elapsedMs\":" + clock.ElapsedMilliseconds + ",\"cpuMs\":" + ((long)(process.TotalProcessorTime - cpu).TotalMilliseconds) + "}");
+            Console.WriteLine("{\"events\":" + index + ",\"frames\":" + intervals.Count + ",\"renderEventMedianMs\":" + Percentile(intervals, 0.5) + ",\"renderEventP95Ms\":" + Percentile(intervals, 0.95) + ",\"handlerMedianMs\":" + Percentile(handlerTimes, 0.5) + ",\"handlerP95Ms\":" + Percentile(handlerTimes, 0.95) + ",\"offsetStepP95\":" + Percentile(jumps, 0.95) + ",\"elapsedMs\":" + clock.ElapsedMilliseconds + ",\"cpuMs\":" + ((long)(process.TotalProcessorTime - cpu).TotalMilliseconds) + ",\"cpuPercent\":" + ((process.TotalProcessorTime - cpu).TotalMilliseconds * 100 / clock.Elapsed.TotalMilliseconds).ToString("0.###", CultureInfo.InvariantCulture) + "}");
         }
         window.Close(); app.Shutdown();
     }
 
-    private static string P95(List<double> values)
+    private static string Percentile(List<double> values, double percentile)
     {
         values.Sort();
-        return (values.Count == 0 ? 0 : values[(int)Math.Ceiling(values.Count * 0.95) - 1]).ToString("0.###", CultureInfo.InvariantCulture);
+        return (values.Count == 0 ? 0 : values[(int)Math.Ceiling(values.Count * percentile) - 1]).ToString("0.###", CultureInfo.InvariantCulture);
     }
 }

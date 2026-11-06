@@ -9,7 +9,7 @@ Utilidad portable para Windows 10/11 que audita el hardware, aplica y revierte o
 | Sección | Qué hace |
 | --- | --- |
 | Hardware | Auditoría WMI nativa de equipo, firmware, CPU, memoria por ranura, discos (S.M.A.R.T.), GPU, batería, Windows y red. Exporta informes en HTML, Excel, Markdown, texto, CSV y JSON, con opción para ocultar datos identificativos. |
-| Rendimiento y Privacidad | Catálogo de optimizaciones con nivel de riesgo, detalles, aplicación y reversión. Perfiles de un clic; las avanzadas quedan agrupadas aparte. |
+| WinUtil y Ceito | WinUtil ofrece ajustes y perfiles con detalles y reversión; Ceito está en pausa y permite revertir ajustes anteriores. |
 | Software | Instalación desatendida con WinGet y respaldo por descarga directa del fabricante. |
 | Actividad | Operaciones en curso con sus pasos, registro filtrable y exportable, y scripts en segundo plano con confirmación antes de terminarlos. |
 | Seguridad | Puntos de restauración, SFC, DISM, limpieza de DNS y copia del registro. |
