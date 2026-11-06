@@ -8,7 +8,11 @@ $ErrorActionPreference = 'Stop'
 function Test-ReleaseGates([string]$ProjectRoot, [bool]$AllowChanges) {
     & (Join-Path $ProjectRoot 'scripts/Test-Ui.ps1')
     if (-not $?) { throw 'Fallaron las pruebas UI.' }
-    & (Join-Path $ProjectRoot 'scripts/Test-Ota.ps1')
+    # The new package is signed after these gates, so the OTA suite checks the latest package already prepared.
+    $ota = @{}
+    $published = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'artifacts\releases') -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'update.json') } | Sort-Object { [version]$_.Name })
+    if ($published.Count) { $ota.PackagePath = $published[-1].FullName }
+    & (Join-Path $ProjectRoot 'scripts/Test-Ota.ps1') @ota
     if (-not $?) { throw 'Fallaron las pruebas OTA.' }
     & node (Join-Path $ProjectRoot 'scripts/check-publish-safety.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Fallo la comprobacion de seguridad de publicacion.' }
