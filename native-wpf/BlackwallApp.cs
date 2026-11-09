@@ -928,7 +928,6 @@ namespace Blackwall
         private string _pendingSearchId;
         private Button _themeBtn;
         private Button _otaBtn;
-        private TextBlock _maximizeIconText;
         private Button _minBtn;
         private Button _maxBtn;
         private Button _closeBtn;
@@ -1048,13 +1047,12 @@ namespace Blackwall
                 if (this.WindowState == WindowState.Maximized)
                 {
                     if (_rootBorder != null) _rootBorder.Padding = new Thickness(7);
-                    if (_maximizeIconText != null) _maximizeIconText.Text = "❐";
                 }
                 else
                 {
                     if (_rootBorder != null) _rootBorder.Padding = new Thickness(0);
-                    if (_maximizeIconText != null) _maximizeIconText.Text = "□";
                 }
+                UpdateMaximizeButton();
             };
 
             AppendLog("Blackwall iniciado · herramientas nativas de Windows disponibles.", "info", "Sistema");
@@ -4946,57 +4944,72 @@ $inventory = @(
             catch { }
         }
 
-        private Button CreateWindowControlButton(string text, Action onClick, bool isClose = false)
+        private const string GlyphMinimize = "", GlyphMaximize = "", GlyphRestore = "", GlyphClose = "";
+        private static readonly ControlTemplate WindowControlTemplate = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+            <ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'>
+                <Border Background='{TemplateBinding Background}' CornerRadius='8'>
+                    <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
+                </Border>
+            </ControlTemplate>");
+
+        private Button CreateWindowControlButton(string glyph, string name, Action onClick, bool isClose = false)
         {
             TextBlock txt = new TextBlock
             {
-                Text = text,
-                FontWeight = FontWeights.Bold,
-                FontSize = isClose ? 13 : 13.5,
+                Text = glyph,
+                FontFamily = NavIconFont,
+                FontSize = 10.5,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = TextPrimary
             };
-            if (text == "□" || text == "❐")
-            {
-                _maximizeIconText = txt;
-            }
 
             Button btn = new Button
             {
-                Width = 46,
-                Height = 54,
+                Width = 42,
+                Height = 32,
+                MinHeight = 0,
+                Margin = new Thickness(1, 0, 1, 0),
+                VerticalAlignment = VerticalAlignment.Center,
                 Content = txt,
+                Template = WindowControlTemplate,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
-                ToolTip = isClose ? "Cerrar" : text == "—" ? "Minimizar" : "Maximizar o restaurar"
+                ToolTip = name
             };
+            System.Windows.Automation.AutomationProperties.SetName(btn, name);
 
             WindowChrome.SetIsHitTestVisibleInChrome(btn, true);
 
-            btn.MouseEnter += (s, e) =>
+            Action highlight = () =>
             {
-                if (isClose)
-                {
-                    btn.Background = BrushHex("#E81123");
-                    txt.Foreground = Brushes.White;
-                }
-                else
-                {
-                    btn.Background = BgElevated;
-                    txt.Foreground = TextPrimary;
-                }
+                btn.Background = isClose ? BrushHex("#C42B1C") : BgElevated;
+                txt.Foreground = isClose ? Brushes.White : TextPrimary;
             };
-
-            btn.MouseLeave += (s, e) =>
+            Action reset = () =>
             {
+                if (btn.IsMouseOver || btn.IsKeyboardFocused) return;
                 btn.Background = Brushes.Transparent;
                 txt.Foreground = TextPrimary;
             };
+            btn.MouseEnter += (s, e) => highlight();
+            btn.GotKeyboardFocus += (s, e) => highlight();
+            btn.MouseLeave += (s, e) => reset();
+            btn.LostKeyboardFocus += (s, e) => reset();
 
             btn.Click += (s, e) => onClick();
             return btn;
+        }
+
+        private void UpdateMaximizeButton()
+        {
+            if (_maxBtn == null) return;
+            bool maximized = WindowState == WindowState.Maximized;
+            ((TextBlock)_maxBtn.Content).Text = maximized ? GlyphRestore : GlyphMaximize;
+            string name = maximized ? "Restaurar" : "Maximizar";
+            _maxBtn.ToolTip = name;
+            System.Windows.Automation.AutomationProperties.SetName(_maxBtn, name);
         }
 
         // ====================================================================
@@ -5354,12 +5367,13 @@ $inventory = @(
 
             // Controles Integrados de Ventana (Minimizar, Restaurar/Maximizar, Cerrar)
             StackPanel winControlsStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Stretch };
-            _minBtn = CreateWindowControlButton("—", () => this.WindowState = WindowState.Minimized);
-            _maxBtn = CreateWindowControlButton((this.WindowState == WindowState.Maximized) ? "❐" : "□", () =>
+            _minBtn = CreateWindowControlButton(GlyphMinimize, "Minimizar", () => this.WindowState = WindowState.Minimized);
+            _maxBtn = CreateWindowControlButton(GlyphMaximize, "Maximizar", () =>
             {
                 this.WindowState = (this.WindowState == WindowState.Maximized) ? WindowState.Normal : WindowState.Maximized;
             });
-            _closeBtn = CreateWindowControlButton("✕", () => this.Close(), true);
+            UpdateMaximizeButton();
+            _closeBtn = CreateWindowControlButton(GlyphClose, "Cerrar", () => this.Close(), true);
 
             winControlsStack.Children.Add(_minBtn);
             winControlsStack.Children.Add(_maxBtn);
@@ -8043,10 +8057,72 @@ $inventory = @(
             }
         }
 
+        // Topics come from a short "Tema: texto" prefix: the signed manifest is a flat list and old clients reject new fields.
+        internal static List<KeyValuePair<string, List<string>>> GroupReleaseNotes(IEnumerable<string> notes)
+        {
+            var groups = new List<KeyValuePair<string, List<string>>>();
+            foreach (string raw in notes)
+            {
+                string note = (raw ?? "").Trim();
+                if (note.Length == 0) continue;
+                var match = Regex.Match(note, @"\A(\p{Lu}\p{L}*(?: \p{L}+){0,2}): (.+)\z", RegexOptions.Singleline);
+                bool topical = match.Success && match.Groups[1].Length <= 24;
+                string topic = topical ? match.Groups[1].Value : "Novedades";
+                var group = groups.FirstOrDefault(g => g.Key == topic);
+                if (group.Value == null) { group = new KeyValuePair<string, List<string>>(topic, new List<string>()); groups.Add(group); }
+                group.Value.Add(topical ? match.Groups[2].Value : note);
+            }
+            return groups;
+        }
+
+        private void FillReleaseSheet(Grid sheet, IEnumerable<string> notes)
+        {
+            var groups = GroupReleaseNotes(notes);
+            if (groups.Count == 1 && groups[0].Value.Count > 3)
+            {
+                var all = groups[0].Value; int half = (all.Count + 1) / 2;
+                groups = new List<KeyValuePair<string, List<string>>> { new KeyValuePair<string, List<string>>(groups[0].Key, all.Take(half).ToList()), new KeyValuePair<string, List<string>>("", all.Skip(half).ToList()) };
+            }
+            // Keep the topics in order and break where the two columns come out closest in length.
+            Func<KeyValuePair<string, List<string>>, int> weight = g => 60 + g.Value.Sum(n => n.Length + 30);
+            int total = groups.Sum(weight), left = 0, split = 0, gap = total;
+            for (int i = 0; i < groups.Count; i++)
+            {
+                left += weight(groups[i]);
+                if (Math.Abs(total - 2 * left) < gap) { gap = Math.Abs(total - 2 * left); split = i + 1; }
+            }
+            bool twoColumns = groups.Count > 1 && groups.Sum(g => g.Value.Count) > 3;
+            if (!twoColumns) split = groups.Count;
+            var columns = new[] { new StackPanel(), new StackPanel() };
+            for (int i = 0; i < groups.Count; i++)
+            {
+                var column = columns[i < split ? 0 : 1];
+                if (groups[i].Key.Length > 0)
+                    column.Children.Add(new TextBlock { Text = groups[i].Key.ToUpperInvariant(), Foreground = CyberCyanBrush, FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, column.Children.Count == 0 ? 0 : 12, 0, 4) });
+                foreach (string note in groups[i].Value)
+                {
+                    var row = new DockPanel { Margin = new Thickness(0, 2, 0, 3) };
+                    var bullet = new TextBlock { Text = "•", Foreground = TextSecondary, FontSize = 12, Width = 12 };
+                    DockPanel.SetDock(bullet, Dock.Left); row.Children.Add(bullet);
+                    row.Children.Add(new TextBlock { Text = note, Foreground = TextPrimary, FontSize = 12.5, LineHeight = 17, TextWrapping = TextWrapping.Wrap });
+                    column.Children.Add(row);
+                }
+            }
+            sheet.Children.Clear(); sheet.ColumnDefinitions.Clear();
+            if (!twoColumns) { sheet.Children.Add(columns[0]); return; }
+            sheet.ColumnDefinitions.Add(new ColumnDefinition());
+            sheet.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            sheet.ColumnDefinitions.Add(new ColumnDefinition());
+            columns[0].Margin = new Thickness(0, 0, 14, 0); columns[1].Margin = new Thickness(14, 0, 0, 0);
+            var rule = new Border { Width = 1, Background = BorderSubtle };
+            Grid.SetColumn(rule, 1); Grid.SetColumn(columns[1], 2);
+            sheet.Children.Add(columns[0]); sheet.Children.Add(rule); sheet.Children.Add(columns[1]);
+        }
+
         private Window CreateOtaUpdateDialog()
         {
             string installed = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            var dialog = new Window { Title = "Actualizaciones de Blackwall", Width = Math.Min(510, SystemParameters.WorkArea.Width - 32), Height = Math.Min(740, SystemParameters.WorkArea.Height - 40), WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = BgApp, Foreground = TextPrimary, FontFamily = FontFamily, Icon = Icon };
+            var dialog = new Window { Title = "Actualizaciones de Blackwall", Width = Math.Min(680, SystemParameters.WorkArea.Width - 32), Height = Math.Min(620, SystemParameters.WorkArea.Height - 40), WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = BgApp, Foreground = TextPrimary, FontFamily = FontFamily, Icon = Icon };
             WindowChrome.SetWindowChrome(dialog, new WindowChrome { CaptionHeight = 0, CornerRadius = new CornerRadius(18), GlassFrameThickness = new Thickness(0), ResizeBorderThickness = new Thickness(0) });
             dialog.Resources = Resources;
             KeyboardNavigation.SetTabNavigation(dialog, KeyboardNavigationMode.Cycle);
@@ -8056,43 +8132,56 @@ $inventory = @(
             string activeStage = null;
             dialog.PreviewKeyDown += (s, e) => { if (e.Key == Key.Escape) { dialog.Close(); e.Handled = true; } };
             dialog.Closed += (s, e) => { cancel.Cancel(); if (!handedOff && activeStage != null) { try { File.WriteAllText(Path.Combine(activeStage, "cancelled"), "1"); } catch { } } };
-            var body = new StackPanel { Margin = new Thickness(28) };
             var hero = new StackPanel();
-            var brand = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
+            var brand = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
             brand.MouseLeftButtonDown += (s, e) => { if (e.LeftButton == MouseButtonState.Pressed) dialog.DragMove(); };
-            var dismiss = CreateStyledButton("×", false); dismiss.MinWidth = 34; dismiss.Padding = new Thickness(8, 0, 8, 0); dismiss.ToolTip = "Posponer actualización";
-            System.Windows.Automation.AutomationProperties.SetName(dismiss, "Posponer actualización");
-            dismiss.Click += (s, e) => dialog.Close(); DockPanel.SetDock(dismiss, Dock.Right); brand.Children.Add(dismiss);
-            brand.Children.Add(new Image { Source = Icon, Width = 38, Height = 38, Margin = new Thickness(0, 0, 12, 0) });
-            brand.Children.Add(new TextBlock { Text = "BLACKWALL  /  EVOLUCIÓN", Foreground = CyberCyanBrush, FontSize = 11, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
+            var dismiss = CreateWindowControlButton(GlyphClose, "Posponer actualización", () => dialog.Close(), true);
+            DockPanel.SetDock(dismiss, Dock.Right); brand.Children.Add(dismiss);
+            brand.Children.Add(new Image { Source = Icon, Width = 30, Height = 30, Margin = new Thickness(0, 0, 10, 0) });
+            brand.Children.Add(new TextBlock { Text = "BLACKWALL", Foreground = TextPrimary, FontSize = 11, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
+            brand.Children.Add(new TextBlock { Text = "|", Foreground = BorderSubtle, FontSize = 13, Margin = new Thickness(10, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center });
+            brand.Children.Add(new TextBlock { Text = "Notas de versión", Foreground = TextSecondary, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             hero.Children.Add(brand);
             OtaRelease available = _availableRelease != null && IsNewerVersion(_availableRelease.Version, installed) ? _availableRelease : null;
-            var heading = new TextBlock { Text = available != null ? "Tu próxima versión." : "Siempre al día.", Foreground = TextPrimary, FontSize = 29, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
-            hero.Children.Add(heading);
-            var version = new TextBlock { Text = "Versión instalada · " + installed, Foreground = CyberCyanBrush, FontSize = 21, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 12) };
-            hero.Children.Add(version);
-            var heroFrame = new Border { Child = hero, Padding = new Thickness(20), CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 0, 20) };
-            heroFrame.SetResourceReference(Border.BackgroundProperty, "MaterialSurface");
-            heroFrame.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge");
-            body.Children.Add(heroFrame);
-            body.Children.Add(new TextBlock { Text = "Revisa las mejoras y elige cuándo actualizar. El paquete incluye la aplicación y sus catálogos; conservamos un respaldo mientras confirmamos el arranque.", Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20, Margin = new Thickness(0, 0, 0, 16) });
+            var titleRow = new DockPanel();
+            var version = new TextBlock { Text = "Instalada: " + installed, Foreground = TextSecondary, FontSize = 12, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(12, 0, 0, 4) };
+            DockPanel.SetDock(version, Dock.Right); titleRow.Children.Add(version);
+            var heading = new TextBlock { Foreground = TextPrimary, FontSize = 24, FontWeight = FontWeights.SemiBold };
+            titleRow.Children.Add(heading);
+            hero.Children.Add(titleRow);
+            var subtitleRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            var notesToggle = CreateLinkButton(""); notesToggle.FontSize = 12; notesToggle.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(notesToggle, Dock.Right); subtitleRow.Children.Add(notesToggle);
+            var subtitle = new TextBlock { Foreground = TextSecondary, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+            subtitleRow.Children.Add(subtitle);
+            hero.Children.Add(subtitleRow);
+            var heroFrame = new Border { Child = hero, Padding = new Thickness(28, 20, 28, 14), BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 0, 0, 1) };
+            var body = new Grid { Margin = new Thickness(28, 16, 28, 16) };
             string manifestUrl = GetConfiguredOtaManifestUrl();
-            var status = new TextBlock { Text = available != null ? "Nueva versión disponible · firma verificada" : "Comprueba si hay una versión nueva.", Foreground = TextPrimary, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 12, 0, 12) };
+            var status = new TextBlock { Text = available != null ? "✓  Firma verificada" : "Comprueba si hay una versión nueva.", Foreground = TextSecondary, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 0, 0, 10) };
             System.Windows.Automation.AutomationProperties.SetLiveSetting(status, System.Windows.Automation.AutomationLiveSetting.Polite);
-            body.Children.Add(status);
-            var progress = new ProgressBar { Height = 5, Maximum = 100, Foreground = CyberCyanBrush, Background = BgElevated, Visibility = Visibility.Collapsed };
-            body.Children.Add(progress);
-            var newNotes = new StackPanel { Visibility = available != null ? Visibility.Visible : Visibility.Collapsed };
-            var newTitle = new TextBlock { Text = available != null ? "NOVEDADES DE " + available.Version : "NOVEDADES", Foreground = TextSecondary, FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 18, 0, 8) };
-            var newText = new TextBlock { Text = available != null ? available.Notes : "", Foreground = TextPrimary, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20, Margin = new Thickness(0, 0, 0, 18) };
-            newNotes.Children.Add(newTitle); newNotes.Children.Add(newText); body.Children.Add(newNotes);
-            body.Children.Add(new TextBlock { Text = "EN ESTA VERSIÓN · " + installed, Foreground = TextSecondary, FontSize = 11, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 18, 0, 8) });
+            var progress = new ProgressBar { Height = 5, Maximum = 100, Foreground = CyberCyanBrush, Background = BgElevated, Margin = new Thickness(0, 0, 0, 10), Visibility = Visibility.Collapsed };
             var installedNotes = _versionInfo != null && _versionInfo.ContainsKey("changelog") ? _versionInfo["changelog"] as System.Collections.IEnumerable : null;
             var installedLines = installedNotes == null ? new List<string>() : installedNotes.Cast<object>().Select(x => Convert.ToString(x)).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
-            body.Children.Add(new TextBlock { Text = installedLines.Count == 0 ? "No hay notas disponibles para esta versión." : string.Join("\n", installedLines.Select(x => "•  " + x)), Foreground = TextPrimary, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20, Margin = new Thickness(0, 0, 0, 18) });
-            var actions = new Grid(); actions.ColumnDefinitions.Add(new ColumnDefinition()); actions.ColumnDefinitions.Add(new ColumnDefinition());
-            var check = CreateStyledButton("Buscar actualizaciones", false); check.Margin = new Thickness(0, 0, 0, 12); check.Visibility = available == null ? Visibility.Visible : Visibility.Collapsed;
-            body.Children.Add(check);
+            bool showingInstalled = false;
+            Action showNotes = () =>
+            {
+                bool hasNew = available != null && IsNewerVersion(available.Version, installed);
+                bool showNew = hasNew && !showingInstalled;
+                var lines = showNew ? available.Notes.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries).Where(x => !string.IsNullOrWhiteSpace(x)).ToList() : installedLines;
+                FillReleaseSheet(body, lines);
+                heading.Inlines.Clear();
+                heading.Inlines.Add(new System.Windows.Documents.Run("Qué cambia en "));
+                heading.Inlines.Add(new System.Windows.Documents.Run(showNew ? available.Version : installed) { Foreground = CyberCyanBrush });
+                string count = lines.Count == 1 ? "La nota" : "Las " + lines.Count + " notas";
+                subtitle.Text = lines.Count == 0 ? "No hay notas disponibles para esta versión." : showNew ? count + ", en una sola vista." : count + " de la versión instalada.";
+                notesToggle.Visibility = hasNew ? Visibility.Visible : Visibility.Collapsed;
+                if (hasNew) notesToggle.Content = showingInstalled ? "Ver novedades de la " + available.Version : "Ver notas de la " + installed + " instalada";
+            };
+            notesToggle.Click += (s, e) => { showingInstalled = !showingInstalled; showNotes(); };
+            showNotes();
+            var actions = new Grid { Width = 340 }; actions.ColumnDefinitions.Add(new ColumnDefinition()); actions.ColumnDefinitions.Add(new ColumnDefinition());
+            var check = CreateStyledButton("Buscar actualizaciones", false); check.Visibility = available == null ? Visibility.Visible : Visibility.Collapsed;
             var install = CreateStyledButton("Actualizar ahora", true); install.IsEnabled = available != null; install.Margin = new Thickness(4, 0, 0, 0); install.HorizontalAlignment = HorizontalAlignment.Stretch;
             var close = CreateStyledButton("Más tarde", false); close.Margin = new Thickness(0, 0, 4, 0); close.HorizontalAlignment = HorizontalAlignment.Stretch;
             close.Click += (s, e) => dialog.Close();
@@ -8109,12 +8198,8 @@ $inventory = @(
                     available = await FetchSignedReleaseAsync(manifestUrl, OtaInstaller.NewStage(), cancel.Token);
                     if (UpdateOnly && (available.Version != RequestedUpdateVersion || available.Hash != RequestedUpdateHash)) throw new InvalidDataException("La publicación cambió desde tu confirmación. Cierra este aviso y comprueba de nuevo.");
                     bool newer = IsNewerVersion(available.Version, installed);
-                    newNotes.Visibility = newer ? Visibility.Visible : Visibility.Collapsed;
-                    newTitle.Text = "NOVEDADES DE " + available.Version;
-                    newText.Text = string.Join("\n", available.Notes.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(x => "•  " + x));
-                    heading.Text = newer ? "Tu próxima versión." : "Ya estás al día.";
-                    version.Text = "Versión instalada · " + installed;
-                    status.Text = newer ? "Versión " + available.Version + " verificada y disponible." : "No hay una versión posterior a la instalada.";
+                    showingInstalled = false; showNotes();
+                    status.Text = newer ? "✓  Firma verificada · versión " + available.Version + " disponible" : "Ya estás al día: no hay una versión posterior a la instalada.";
                     install.IsEnabled = newer;
                 }
                 catch (Exception ex) { status.Text = cancel.IsCancellationRequested ? "Comprobación cancelada." : "No se pudo comprobar: " + ex.Message; }
@@ -8205,10 +8290,17 @@ $inventory = @(
                 }
                 else if (install.IsEnabled) install.Focus(); else check.Focus();
             };
-            var layout = new Grid(); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            layout.Children.Add(new SmoothScrollViewer { ReduceMotion = !MotionAllowed, Background = BgApp, Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-            var footer = new Border { Background = BgSidebar, BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(28, 18, 28, 14), Child = actions };
-            Grid.SetRow(footer, 1); layout.Children.Add(footer);
+            var layout = new Grid(); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.Children.Add(heroFrame);
+            var notesScroll = new SmoothScrollViewer { ReduceMotion = !MotionAllowed, Background = BgApp, Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            Grid.SetRow(notesScroll, 1); layout.Children.Add(notesScroll);
+            var buttonRow = new DockPanel { LastChildFill = false };
+            DockPanel.SetDock(actions, Dock.Right); buttonRow.Children.Add(actions);
+            DockPanel.SetDock(check, Dock.Left); buttonRow.Children.Add(check);
+            var footerStack = new StackPanel();
+            footerStack.Children.Add(status); footerStack.Children.Add(progress); footerStack.Children.Add(buttonRow);
+            var footer = new Border { Background = BgSidebar, BorderBrush = BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(28, 12, 28, 14), Child = footerStack };
+            Grid.SetRow(footer, 2); layout.Children.Add(footer);
             var frame = new Border { Background = BgApp, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(18), Child = layout };
             frame.SetResourceReference(Border.BorderBrushProperty, "MaterialEdge"); dialog.Content = frame;
             return dialog;
