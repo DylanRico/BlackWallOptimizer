@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Blackwall;
 
@@ -64,6 +66,7 @@ internal static class NativeOtaCheck
         Check(result.StartsWith(healthy ? "OK:" : "ERROR:"), "Worker reports the real outcome: " + result);
         Check(OtaProtocol.HashFile(target) == (healthy ? OtaProtocol.HashFile(candidate) : previousHash), healthy ? "Signed test app replaces the copy and confirms health" : "Failed startup restores the previous test app");
         Check(Directory.GetFiles(targetFolder, healthy ? "*.previous.*" : "*.failed.*").Length == 1, "Recovery artifact is retained");
+        if (healthy) Check(Directory.GetFiles(targetFolder, "*.lock").Length == 0, "A finished update leaves no lock files next to the executable");
     }
     private static void RejectedProcessUpdate(string fixture, string candidate, RSACryptoServiceProvider rsa, string version, bool cancel)
     {
@@ -122,7 +125,7 @@ internal static class NativeOtaCheck
         string folder = Path.Combine(fixture, "recovery"); Directory.CreateDirectory(folder);
         string target = Path.Combine(folder, "app.exe"), backup = target + ".previous." + Guid.NewGuid().ToString("N");
         string state = target + ".ota-state.json";
-        Action<string, string, string> write = (status, path, expectedHash) => File.WriteAllText(state, OtaProtocol.Json.Serialize(new { state = status, backup = path, previousHash = expectedHash, version = "1.4.7" }));
+        Action<string, string, string> write = (status, path, expectedHash) => { if (File.Exists(state)) File.SetAttributes(state, FileAttributes.Normal); File.WriteAllText(state, OtaProtocol.Json.Serialize(new { state = status, backup = path, previousHash = expectedHash, version = "1.4.7" })); };
         Func<string> run = () => (string)recover.Invoke(null, new object[] { target });
         File.WriteAllText(target, "new"); File.WriteAllText(backup, "previous");
         string hash = OtaProtocol.HashFile(backup);
@@ -131,11 +134,21 @@ internal static class NativeOtaCheck
         write("installed", Path.Combine(fixture, Path.GetFileName(backup)), hash);
         Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Backup outside the executable directory is rejected");
         write("healthy", backup, hash);
+        string leftover = target + ".previous." + Guid.NewGuid().ToString("N"), failed = target + ".failed." + Guid.NewGuid().ToString("N");
+        File.WriteAllText(leftover, "older"); File.WriteAllText(failed, "failed"); File.WriteAllText(target + ".ota.lock", ""); File.WriteAllText(target + ".ota-session.lock", "");
         Check(run() == null && File.ReadAllText(target) == "new", "Healthy state is not rolled back");
+        Check(File.Exists(backup) && !File.Exists(leftover) && !File.Exists(failed), "Startup after a healthy update keeps only the recorded backup");
+        Check(!File.Exists(target + ".ota.lock") && !File.Exists(target + ".ota-session.lock"), "Startup removes lock files left by older versions");
+        Check((File.GetAttributes(backup) & FileAttributes.Hidden) != 0 && (File.GetAttributes(state) & FileAttributes.Hidden) != 0, "Startup hides the backup and update state");
+        var tidy = typeof(OtaInstaller).GetMethod("Tidy", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Exception tidyFailure = null;
+        try { tidy.Invoke(null, new object[] { Path.Combine(fixture, "missing-folder", "app.exe"), null }); } catch (Exception ex) { tidyFailure = ex; }
+        Check(tidyFailure == null, "Cleanup problems never fail an update or a start");
         write("installed", backup, hash);
         using (var locked = File.Open(target + ".ota.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Active installation is not interrupted");
-        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "previous", "Interrupted installation restores matching previous bytes");
+        File.SetAttributes(state, File.GetAttributes(state) | FileAttributes.Hidden); File.SetAttributes(backup, File.GetAttributes(backup) | FileAttributes.Hidden);
+        Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "previous", "Interrupted installation restores matching previous bytes, even from hidden files");
         Check(File.ReadAllText(state).Contains("rolled-back"), "Recovery records rolled-back state");
         // Cut before the swap: the executable is still the previous version and no backup exists yet. Nothing to
         // recover, and the warning must not come back on every start.
@@ -154,7 +167,7 @@ internal static class NativeOtaCheck
         File.WriteAllText(linkedTarget, "new"); File.WriteAllText(linkedBackup, "previous");
         File.WriteAllText(linkedTarget + ".ota-state.json", OtaProtocol.Json.Serialize(new { state = "installed", backup = linkedBackup, previousHash = OtaProtocol.HashFile(linkedBackup), version = "1.4.7" }));
         Check(!String.IsNullOrEmpty((string)recover.Invoke(null, new object[] { linkedTarget })) && File.ReadAllText(linkedTarget) == "new" && File.Exists(linkedBackup), "A reparse-point ancestor is reported without replacing the executable");
-        File.WriteAllText(target, "new"); File.WriteAllText(state, "{broken");
+        File.WriteAllText(target, "new"); File.SetAttributes(state, FileAttributes.Normal); File.WriteAllText(state, "{broken");
         Check(!String.IsNullOrEmpty(run()) && File.ReadAllText(target) == "new", "Malformed state is reported without modifying the executable");
     }
     private static void Network(string baseUrl, string thumbprint, string folder)
@@ -259,9 +272,18 @@ internal static class NativeOtaCheck
                 Check(OtaProtocol.HashFile(target) == original, "Concurrency failure never changes the target");
                 using (var locked = File.Open(target, FileMode.Open, FileAccess.Read, FileShare.Read)) Reject(() => OtaInstaller.Apply(payload, target, release, candidate => true), "Locked installation is not overwritten");
                 Check(OtaProtocol.HashFile(target) == original, "Locked-target failure preserves the original bytes");
+                string staleBackup = target + ".previous." + Guid.NewGuid().ToString("N"), unrelated = target + ".previous.notas.txt", otherApp = Path.Combine(fixture, "other.exe.previous." + Guid.NewGuid().ToString("N"));
+                foreach (string file in new[] { staleBackup, unrelated, otherApp }) File.WriteAllText(file, "keep?");
+                Check(Directory.GetFiles(fixture, "target.exe.failed.*").Length == 1, "Fixture holds the rollback leftover before a successful update");
                 OtaInstaller.Apply(payload, target, release, candidate => true); Check(OtaProtocol.HashFile(target) == release.Hash, "Successful transaction installs the verified bytes");
                 Reject(() => OtaInstaller.Apply(payload, target, release, candidate => true), "Same-version reinstallation is rejected");
-                Check(Directory.GetFiles(fixture, "target.exe.previous.*").Length == 1, "Successful transaction retains previous backup");
+                Check(Directory.GetFiles(fixture, "target.exe.previous.*").Count(f => Regex.IsMatch(f, @"\.previous\.[a-f0-9]{32}$")) == 1 && !File.Exists(staleBackup), "Successful transaction keeps only the newest previous backup");
+                Check(Directory.GetFiles(fixture, "target.exe.failed.*").Length == 0, "Successful transaction removes rollback leftovers");
+                Check(File.Exists(unrelated) && File.Exists(otherApp), "Cleanup never touches files that are not this executable's backups");
+                string kept = Directory.GetFiles(fixture, "target.exe.previous.*").First(f => Regex.IsMatch(f, @"\.previous\.[a-f0-9]{32}$"));
+                Check((File.GetAttributes(kept) & FileAttributes.Hidden) != 0 && (File.GetAttributes(target + ".ota-state.json") & FileAttributes.Hidden) != 0, "Backup and update state are hidden next to the executable");
+                Check((File.GetAttributes(target) & FileAttributes.Hidden) == 0, "The executable itself stays visible");
+                Check(!File.Exists(target + ".ota.lock"), "The install lock disappears once the update finishes");
                 CompileHost(hostFixture, Path.Combine(hostFixture, "good"), "1.3.1", false);
                 CompileHost(hostFixture, Path.Combine(hostFixture, "bad"), "1.3.1", true);
                 ProcessUpdate(hostFixture, Path.Combine(hostFixture, "good", "Host.exe"), rsa, true);

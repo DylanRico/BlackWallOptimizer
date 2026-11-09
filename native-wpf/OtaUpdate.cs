@@ -268,7 +268,7 @@ namespace Blackwall
                 using (var parent = Process.GetProcessById(int.Parse(args[2], CultureInfo.InvariantCulture)))
                 {
                     string target = parent.MainModule.FileName;
-                    using (var session = new FileStream(target + ".ota-session.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                    using (var session = OpenLock(target + ".ota-session.lock"))
                     {
                     string previousHash = OtaProtocol.HashFile(target);
                     if (OtaProtocol.HashFile(target) != OtaProtocol.HashFile(Process.GetCurrentProcess().MainModule.FileName)) throw new InvalidDataException("El proceso padre no coincide con el instalador.");
@@ -339,6 +339,47 @@ namespace Blackwall
             }
             finally { if (File.Exists(temp)) File.Delete(temp); }
         }
+        // Lock files delete themselves when released, so a finished update leaves none behind.
+        private static FileStream OpenLock(string path)
+        {
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        private static void Hide(string path)
+        {
+            if (File.Exists(path)) File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
+        }
+        // Best effort, never fatal: keeps one backup, removes rollback leftovers and stale locks, hides the rest.
+        // Only this executable's own GUID-named files are touched.
+        private static void Tidy(string target, string keepBackup)
+        {
+            try { TidyCore(target, keepBackup); } catch { }
+        }
+        private static void TidyCore(string target, string keepBackup)
+        {
+            string folder = Path.GetDirectoryName(target), name = Path.GetFileName(target);
+            string keep = keepBackup == null ? null : Path.GetFullPath(keepBackup);
+            foreach (string kind in new[] { ".previous.", ".failed." })
+            {
+                foreach (string file in Directory.GetFiles(folder, name + kind + "*"))
+                {
+                    try
+                    {
+                        if (!Regex.IsMatch(Path.GetFileName(file).Substring(name.Length + kind.Length), "^[a-fA-F0-9]{32}$")) continue;
+                        if (kind == ".previous." && (keep == null || String.Equals(Path.GetFullPath(file), keep, StringComparison.OrdinalIgnoreCase))) continue;
+                        if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) continue;
+                        File.SetAttributes(file, FileAttributes.Normal);
+                        File.Delete(file);
+                    }
+                    catch { }
+                }
+            }
+            foreach (string lockPath in new[] { target + ".ota.lock", target + ".ota-session.lock" })
+            {
+                try { if (File.Exists(lockPath) && (File.GetAttributes(lockPath) & FileAttributes.ReparsePoint) == 0) using (OpenLock(lockPath)) { } }
+                catch { }
+            }
+            try { if (keep != null) Hide(keep); Hide(target + ".ota-state.json"); } catch { }
+        }
         public static string RecoverInterrupted(string executable)
         {
             string target = Path.GetFullPath(executable), journal = target + ".ota-state.json";
@@ -350,7 +391,13 @@ namespace Blackwall
                 var data = OtaProtocol.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(journal));
                 if (data == null || !data.ContainsKey("state") || !(data["state"] is string)) throw new InvalidDataException("Estado OTA inválido.");
                 string state = (string)data["state"];
-                if (state == "healthy" || state == "rolled-back") return null;
+                if (state == "healthy" || state == "rolled-back")
+                {
+                    // A finished update only needs its recorded backup; anything older is housekeeping.
+                    string recorded = data.ContainsKey("backup") && data["backup"] is string ? (string)data["backup"] : null;
+                    Tidy(target, state == "healthy" ? recorded : null);
+                    return null;
+                }
                 if (state != "prepared" && state != "installed") throw new InvalidDataException("Fase OTA desconocida.");
                 if (!data.ContainsKey("backup") || !(data["backup"] is string) || !data.ContainsKey("previousHash") || !(data["previousHash"] is string)) throw new InvalidDataException("Faltan datos verificables del respaldo.");
                 string backup = (string)data["backup"], hash = (string)data["previousHash"];
@@ -360,7 +407,7 @@ namespace Blackwall
                 if (File.Exists(backup)) RejectReparse(backup);
                 string lockPath = target + ".ota.lock";
                 if (File.Exists(lockPath)) RejectReparse(lockPath);
-                using (var installLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                using (var installLock = OpenLock(lockPath))
                 {
                     // Cut before the swap: the executable is still the previous version, so there is nothing to restore.
                     if (String.Equals(OtaProtocol.HashFile(target), hash, StringComparison.OrdinalIgnoreCase))
@@ -385,7 +432,7 @@ namespace Blackwall
         }
         public static void Apply(string payload, string target, OtaRelease release, Func<string, bool> healthy)
         {
-            using (var installLock = new FileStream(target + ".ota.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            using (var installLock = OpenLock(target + ".ota.lock"))
             {
             OtaProtocol.VerifyBinary(payload, release);
             if (OtaProtocol.ParseVersion(release.Version) <= OtaProtocol.ParseVersion(AssemblyName.GetAssemblyName(target).Version.ToString(3))) throw new InvalidDataException("No se permite instalar la misma versión ni una anterior.");
@@ -404,6 +451,7 @@ namespace Blackwall
                 record("installed");
                 if (!healthy(target)) throw new IOException("La nueva versión no confirmó el arranque.");
                 record("healthy");
+                Tidy(target, backup);
             }
             catch
             {

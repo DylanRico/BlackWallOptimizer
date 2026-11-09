@@ -7,6 +7,8 @@
     "Novedades: Botones y avisos siempre visibles al pie; la firma verificada se indica de forma más clara.",
     "Interfaz: Botones de minimizar, maximizar y cerrar con los iconos de Windows, más compactos y con resaltado al usar el teclado.",
     "Interfaz: El botón de cerrar del aviso de actualización es igual al de la ventana principal.",
+    "Actualizaciones: Junto a la app queda un solo respaldo; los anteriores se borran al confirmar que la versión nueva arranca.",
+    "Actualizaciones: Los archivos de control se borran solos al terminar y el respaldo queda oculto.",
     "Incluye todo lo de 1.5.0: WinUtil, reversión real, energía segura, quitar apps preinstaladas, Secure Boot y caché en MB."
   ]
 }
