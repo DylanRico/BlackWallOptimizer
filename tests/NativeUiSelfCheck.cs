@@ -147,7 +147,6 @@ internal static class NativeUiSelfCheck
             foreach (Dictionary<string, object> entry in (IEnumerable)Field("_apps"))
             {
                 Dictionary<string, object> fixture = new Dictionary<string, object>(entry);
-                fixture["iconUrl"] = "";
                 apps.Add(fixture);
             }
             SetField("_apps", apps);
@@ -178,6 +177,7 @@ internal static class NativeUiSelfCheck
             CheckWinUtilSection(args[1]);
             CheckRevertsEverything147(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0])), "..", "tests", "fixtures", "tweaks-v1.4.7.json"));
             CheckHardwareReports();
+            CheckPreviewImprovements(args[1]);
             CheckGraphiteInteractions(args[1]);
             CheckStableSectionFilters(args[1]);
             SetField("_hardware", null); // the section filter checks ran on a hardware fixture
@@ -284,14 +284,10 @@ internal static class NativeUiSelfCheck
             Check(liquidEdge.HasAnimatedProperties, "dashboard silver edge starts a shared animation");
             PumpUntil(() => liquidEdge.Angle > 1);
             Check(liquidEdge.Angle > 1, "dashboard silver edge moves without pointer interaction");
-            object energy = Field("_headerEnergy");
-            energy.GetType().GetMethod("SetRunning").Invoke(energy, new object[] { true });
-            Check((bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "electric trace runs on demand");
             SetField("_reduceMotion", true);
             Call("UpdateMotionPreference");
             Check(!liquidEdge.HasAnimatedProperties, "reduced motion stops the dashboard silver edge");
             Check(animated.Count == 0 && !first.HasAnimatedProperties && first.RenderTransform == Transform.Identity, "reduced motion removes in-flight card animations");
-            Check(!(bool)energy.GetType().GetProperty("Running").GetValue(energy, null), "reduced motion stops the electric trace timer");
             Check(sheen.BorderBrush == null, "reduced motion clears active button reflection");
             Snapshot(directory, "native-motion-rest.png", 1080, 700, content);
             host.RootVisual = null;
@@ -644,9 +640,10 @@ internal static class NativeUiSelfCheck
                 string target = Convert.ToString(Descendants((DependencyObject)page).First(e => e.Uid == "motion-card" && e.Tag != null).Tag);
                 var item = ((List<Dictionary<string, object>>)Field("_tweaks")).First(t => Convert.ToString(t["id"]) == target);
                 string title = Convert.ToString(item["title"]);
+                string display = item.ContainsKey("shortTitle") && Convert.ToString(item["shortTitle"]).Length > 0 ? Convert.ToString(item["shortTitle"]) : title;
                 ((TextBox)Field("_sectionSearch")).Text = "zzzz-hide-target";
                 ((TextBox)Field("_omniboxInput")).Text = title;
-                var result = ((IList)Field("_omniboxItems")).Cast<Button>().First(b => System.Windows.Automation.AutomationProperties.GetName(b).StartsWith(title + "."));
+                var result = ((IList)Field("_omniboxItems")).Cast<Button>().First(b => System.Windows.Automation.AutomationProperties.GetName(b).StartsWith(display + "."));
                 result.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 PumpUntil(() => Field("_pendingSearchId") == null, 10);
                 Check(!Object.ReferenceEquals(page, scroll.Content) && (string)Field("_tweakSearchText") == "" && Descendants((DependencyObject)scroll.Content).Any(e => e.Uid == "motion-card" && Convert.ToString(e.Tag) == target && e.Visibility == Visibility.Visible), "global search opens its target in the current tab after clearing the filter");
@@ -1121,6 +1118,133 @@ internal static class NativeUiSelfCheck
         finally { SetField("_hardware", saved); }
     }
 
+    private static void CheckPreviewImprovements(string directory)
+    {
+        MethodInfo wingetOk = _type.GetMethod("IsWingetSuccessCode", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((bool)wingetOk.Invoke(null, new object[] { 0 }) && (bool)wingetOk.Invoke(null, new object[] { -1978335189 }) && !(bool)wingetOk.Invoke(null, new object[] { 1 }), "winget recognizes exit code 0 and already-up-to-date (-1978335189)");
+
+        MethodInfo memType = _type.GetMethod("FormatSmbiosMemoryType", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((string)memType.Invoke(null, new object[] { 24 }) == "DDR3"
+            && (string)memType.Invoke(null, new object[] { 26 }) == "DDR4"
+            && (string)memType.Invoke(null, new object[] { 29 }) == "LPDDR3"
+            && (string)memType.Invoke(null, new object[] { 30 }) == "LPDDR4"
+            && (string)memType.Invoke(null, new object[] { 34 }) == "DDR5"
+            && (string)memType.Invoke(null, new object[] { 35 }) == "LPDDR5"
+            && (string)memType.Invoke(null, new object[] { 0 }) == "Sin especificar", "RAM types map SMBIOS codes including LPDDR and unknown without guessing DDR4");
+
+        MethodInfo soldered = _type.GetMethod("IsSolderedFormFactor", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((bool)soldered.Invoke(null, new object[] { 13 }) && !(bool)soldered.Invoke(null, new object[] { 12 }) && !(bool)soldered.Invoke(null, new object[] { 8 }), "SMD form factor 13 identifies soldered memory");
+
+        MethodInfo channelMode = _type.GetMethod("FormatChannelMode", BindingFlags.Static | BindingFlags.NonPublic);
+        Check(((string)channelMode.Invoke(null, new object[] { 8, true })).Contains("soldada")
+            && ((string)channelMode.Invoke(null, new object[] { 1, true })) == "Memoria soldada"
+            && ((string)channelMode.Invoke(null, new object[] { 2, false })).StartsWith("Dual Channel")
+            && ((string)channelMode.Invoke(null, new object[] { 3, false })).Contains("3 módulos")
+            && ((string)channelMode.Invoke(null, new object[] { 4, false })).Contains("4 módulos"), "channel mode distinguishes soldered memory and 1/2/3/4 module layouts");
+
+        MethodInfo tempFolders = _type.GetMethod("TempFoldersForAccount", BindingFlags.Static | BindingFlags.NonPublic);
+        string[] sameUser = (string[])tempFolders.Invoke(null, new object[] { null, @"D:\Perfiles\A\Temp", @"C:\Windows\Temp" });
+        string[] otherUser = (string[])tempFolders.Invoke(null, new object[] { @"PC\Otro", @"D:\Perfiles\Admin\Temp", @"C:\Windows\Temp" });
+        Check(sameUser.Length == 2 && otherUser.Length == 1 && otherUser[0] == @"C:\Windows\Temp", "other-account elevation scopes temp cleanup strictly to Windows Temp");
+
+        string rootVictim = Path.Combine(Path.GetTempPath(), "BlackwallVictimRoot-" + Guid.NewGuid().ToString("N"));
+        string rootJunction = Path.Combine(Path.GetTempPath(), "BlackwallJunctionRoot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(rootVictim);
+        try
+        {
+            string victimFile = Path.Combine(rootVictim, "keep.tmp");
+            File.WriteAllBytes(victimFile, new byte[256]);
+            File.SetLastWriteTime(victimFile, DateTime.Now.AddDays(-5));
+            using (var mklink = Process.Start(new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + rootJunction + "\" \"" + rootVictim + "\"") { UseShellExecute = false, CreateNoWindow = true }))
+                mklink.WaitForExit(10000);
+            var clean = _type.GetMethod("DeleteOldTempFiles", BindingFlags.Static | BindingFlags.NonPublic);
+            long cleanedRoot = (long)clean.Invoke(null, new object[] { rootJunction, DateTime.Now.AddDays(-1), false });
+            Check(cleanedRoot == 0 && File.Exists(victimFile), "temp cleanup refuses when the root folder itself is a junction");
+        }
+        finally
+        {
+            if (Directory.Exists(rootJunction)) Directory.Delete(rootJunction, false);
+            if (Directory.Exists(rootVictim)) Directory.Delete(rootVictim, true);
+        }
+
+        UIElement safetyView = (UIElement)Call("BuildSafetyView");
+        string safetyText = string.Join(" | ", Descendants(safetyView).OfType<TextBlock>().Select(t => t.Text));
+        var safetyButtons = Descendants(safetyView).OfType<Button>().Select(b => Convert.ToString(b.Content)).ToList();
+        Check(!safetyText.Contains("SystemRestore") && safetyText.Contains("SRSetRestorePointW"), "safety view names the native SRSetRestorePointW API");
+        Check(safetyButtons.All(label => !label.Contains("\uD83E\uDE7A")), "safety buttons omit the broken stethoscope glyph");
+
+        object savedHardware = Field("_hardware");
+        var caps = new Dictionary<string, object>();
+        foreach (string k in new[] { "laptop", "battery", "integratedOnly", "amdGpu", "modernStandby", "hibernation", "systemSsd", "win11", "edge" }) caps[k] = true;
+        SetField("_hardware", new Dictionary<string, object> { { "chassis", new Dictionary<string, object> { { "isLaptop", true } } }, { "capabilities", caps } });
+        try
+        {
+            var input = (TextBox)Field("_omniboxInput");
+            input.Text = "telemetr";
+            var omniText = string.Join(" | ", Descendants((DependencyObject)Field("_omniboxResultsPanel")).OfType<TextBlock>().Select(t => t.Text));
+            Check((omniText.Contains("Riesgo bajo") || omniText.Contains("Riesgo medio") || omniText.Contains("Riesgo alto")) && !omniText.Contains("LOW") && !omniText.Contains("MEDIUM"), "global search uses Spanish risk labels");
+            input.Text = "";
+        }
+        finally { SetField("_hardware", savedHardware); }
+
+        var deviceBadge = (TextBlock)Field("_deviceBadgeText");
+        Check(deviceBadge.TextTrimming == TextTrimming.CharacterEllipsis && deviceBadge.ToolTip != null, "header device badge truncates cleanly with ellipsis and preserves full tooltip");
+
+        MarkLoaded("tweaks");
+        SetField("_hardware", new Dictionary<string, object> { { "capabilities", caps } });
+        var states = (Dictionary<string, bool>)Field("_tweakStates");
+        var partialSet = (HashSet<string>)Field("_tweakPartial");
+        var activityTweak = ((List<Dictionary<string, object>>)Field("_tweaks")).First(t => Convert.ToString(t["id"]) == "debloat_activity_history");
+        bool hadState = states.ContainsKey("debloat_activity_history");
+        bool prevState = hadState && states["debloat_activity_history"];
+        try
+        {
+            states["debloat_activity_history"] = true;
+            partialSet.Add("debloat_activity_history");
+            Border partialCard = (Border)Call("BuildTweakCard", activityTweak);
+            string partialTexts = string.Join(" | ", Descendants(partialCard).OfType<TextBlock>().Select(t => t.Text));
+            Check(partialTexts.Contains("Aplicado en parte") && !partialTexts.Contains("Detectado como activo"), "partial tweak footer matches its amber badge instead of saying Detectado como activo");
+            partialSet.Remove("debloat_activity_history");
+            Border fullCard = (Border)Call("BuildTweakCard", activityTweak);
+            string fullTexts = string.Join(" | ", Descendants(fullCard).OfType<TextBlock>().Select(t => t.Text));
+            Check(fullTexts.Contains("Detectado como activo"), "fully applied tweak keeps Detectado como activo");
+        }
+        finally
+        {
+            partialSet.Remove("debloat_activity_history");
+            if (hadState) states["debloat_activity_history"] = prevState; else states.Remove("debloat_activity_history");
+            SetField("_hardware", savedHardware);
+        }
+
+        object prevSession = Field("_sessionAccount");
+        SetField("_sessionAccount", @"PC\OtraPersona");
+        try
+        {
+            UIElement startupCard = (UIElement)Call("BuildStartupCard");
+            string startupText = string.Join(" | ", Descendants(startupCard).OfType<TextBlock>().Select(t => t.Text));
+            Check(startupText.Contains(@"PC\OtraPersona"), "startup card warns when Blackwall runs under another account");
+        }
+        finally { SetField("_sessionAccount", prevSession); }
+
+        SetField("_hardware", new Dictionary<string, object>
+        {
+            { "chassis", new Dictionary<string, object> { { "manufacturer", "ACME" }, { "model", "Test" }, { "deviceType", "Laptop" }, { "isLaptop", true } } },
+            { "motherboard", new Dictionary<string, object> { { "bootMode", "UEFI" } } },
+            { "cpu", new Dictionary<string, object> { { "name", "Ryzen" }, { "physicalCores", 4 }, { "logicalThreads", 8 }, { "loadPercent", -1 } } },
+            { "memory", new Dictionary<string, object> { { "totalGb", 16 }, { "usagePercent", 30 }, { "memoryType", "LPDDR5" }, { "channelMode", "Memoria soldada" }, { "slots", new object[] { new Dictionary<string, object> { { "slotName", "Soldered" }, { "occupied", true }, { "capacityGb", 16 }, { "voltageMv", 0 } } } } } },
+            { "storage", new object[0] },
+            { "gpus", new object[0] },
+            { "battery", new Dictionary<string, object>() },
+            { "osNetwork", new Dictionary<string, object> { { "caption", "Windows 11" } } }
+        });
+        try
+        {
+            string md = (string)Call("RenderHardwareReport", "md", true);
+            Check(md.Contains("LPDDR5") && md.Contains("Sin informar") && !md.Contains("1200 mV"), "hardware report preserves LPDDR5 and reports missing CPU/voltage as Sin informar");
+        }
+        finally { SetField("_hardware", savedHardware); }
+    }
+
     // Real registry round-trip in a throwaway HKCU key; no system setting is touched.
     private static void CheckTweakEngine()
     {
@@ -1166,8 +1290,44 @@ internal static class NativeUiSelfCheck
             Task failed = run(partial, true);
             PumpUntil(() => failed.IsCompleted);
             Check(failed.IsFaulted && failed.Exception.InnerException.Message.Contains("1 de 2") && !states["engine-partial"], "a rejected change is reported as an error, never as applied");
-            Check(changes.Any(c => Convert.ToString(c["id"]) == "engine-partial"), "a half-applied tweak keeps its saved values so it can still be reverted");
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(testKey))
+                Check(k.GetValue("Partial") == null && !changes.Any(c => Convert.ToString(c["id"]) == "engine-partial"), "a tweak that fails halfway undoes what it already wrote and leaves no journal entry");
             changes.Clear();
+
+            // Opened with another account (UAC asked for a different administrator): per-user settings would land in
+            // that account, so applying them is refused while machine-wide settings stay available.
+            MethodInfo otherAccount = _type.GetMethod("IsOtherAccount", BindingFlags.Static | BindingFlags.NonPublic);
+            Check(!(bool)otherAccount.Invoke(null, new object[] { @"PC\Dylan", @"pc\dylan" }) && (bool)otherAccount.Invoke(null, new object[] { @"PC\Dylan", @"PC\Admin" }) && !(bool)otherAccount.Invoke(null, new object[] { null, @"PC\Admin" }), "a different session user is detected, an unknown one is not");
+            MethodInfo userHive = _type.GetMethod("TouchesUserHive", BindingFlags.Static | BindingFlags.NonPublic);
+            var machineOnly = new Dictionary<string, object> { { "applyOps", new object[] { new Dictionary<string, object> { { "type", "reg_dword" }, { "hive", "HKLM" }, { "key", "x" }, { "name", "y" }, { "value", 1 } } } } };
+            Check((bool)userHive.Invoke(null, new object[] { good }) && !(bool)userHive.Invoke(null, new object[] { machineOnly }), "per-user tweaks are told apart from machine-wide ones");
+            SetField("_sessionAccount", @"PC\OtraPersona");
+            try
+            {
+                Task blocked = run(new Dictionary<string, object> { { "id", "engine-blocked" }, { "title", "Prueba" }, { "applyOps", new object[] { dword("Blocked", 1) } } }, true);
+                PumpUntil(() => blocked.IsCompleted);
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(testKey))
+                    Check(blocked.IsFaulted && blocked.Exception.InnerException.Message.Contains("otra cuenta") && (k == null || k.GetValue("Blocked") == null), "a per-user tweak is refused when Blackwall runs with another account");
+                var banner = Descendants((DependencyObject)Call("BuildWinUtilView")).OfType<TextBlock>().Any(t => t.Text.Contains("PC\\OtraPersona"));
+                Check(banner, "WinUtil explains which account the session belongs to");
+                var discordEntry = ((List<Dictionary<string, object>>)Field("_apps")).First(a => Convert.ToString(a["id"]) == "discord");
+                Check(discordEntry.ContainsKey("perUser") && Equals(discordEntry["perUser"], true), "Discord's per-user installer is marked as such");
+                // A fixture that does not exist anywhere: even a broken guard could not install a real app.
+                var perUserFixture = new Dictionary<string, object> { { "id", "fixture" }, { "name", "Fixture" }, { "wingetId", "Blackwall.SelfCheck.NoExiste" }, { "perUser", true } };
+                int operationsBefore = ((System.Collections.ICollection)Field("_operations")).Count;
+                Task refusedInstall = (Task)Call("InstallSingleAppAsync", perUserFixture);
+                PumpUntil(() => refusedInstall.IsCompleted);
+                Check(refusedInstall.Status == TaskStatus.RanToCompletion && ((System.Collections.ICollection)Field("_operations")).Count == operationsBefore, "a per-user app is not installed into another account (nothing is downloaded or run)");
+            }
+            finally { SetField("_sessionAccount", null); }
+
+            // A write Windows accepts but does not keep must read back as not holding.
+            var holds = _type.GetMethod("OperationHolds", BindingFlags.Instance | BindingFlags.NonPublic);
+            using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(testKey)) k.SetValue("Kept", 3, Microsoft.Win32.RegistryValueKind.DWord);
+            Check((bool?)holds.Invoke(_window, new object[] { dword("Kept", 3) }) == true && (bool?)holds.Invoke(_window, new object[] { dword("Kept", 4) }) == false, "the re-read compares the exact value");
+            using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(testKey)) k.SetValue("Kept", "3", Microsoft.Win32.RegistryValueKind.String);
+            Check((bool?)holds.Invoke(_window, new object[] { dword("Kept", 3) }) == false, "the re-read also compares the value type");
+            Check(holds.Invoke(_window, new object[] { new Dictionary<string, object> { { "type", "service_stop" }, { "name", "Fixture" } } }) == null, "ops without a registry value are not judged by the re-read");
 
             // The user's own values (not the catalog defaults) come back, per tweak and with Revertir todo.
             using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(testKey))
@@ -1318,7 +1478,7 @@ internal static class NativeUiSelfCheck
 
         // A tampered cambios.json cannot make Blackwall run changes the catalog never makes.
         Func<Dictionary<string, object>, bool> allowed = op => (bool)Call("IsAllowedRestoreOp", op);
-        Func<string, string, string, Dictionary<string, object>> reg = (hive, key, name) => new Dictionary<string, object> { { "type", "reg_value" }, { "hive", hive }, { "key", key }, { "name", name }, { "kind", "DWord" }, { "value", 0 } };
+        Func<string, string, string, Dictionary<string, object>> reg = (hive, key, name) => new Dictionary<string, object> { { "type", "reg_value" }, { "hive", hive }, { "key", key }, { "name", name }, { "kind", "DWord" }, { "value", 3 } };
         Func<string, Dictionary<string, object>> power = args => new Dictionary<string, object> { { "type", "powercfg" }, { "args", args } };
         Check(allowed(reg("HKLM", @"SYSTEM\CurrentControlSet\Services\DiagTrack", "Start")) && allowed(power("/setactive 381b4222-f694-41f0-9685-ff5bb260df2e"))
             && allowed(new Dictionary<string, object> { { "type", "service_start" }, { "name", "DiagTrack" } }) && allowed(power("/delete b1ac0a11-5e7f-4d2a-9c3e-0000000001a5")),
@@ -1326,6 +1486,12 @@ internal static class NativeUiSelfCheck
         Check(!allowed(reg("HKLM", @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "Malware")) && !allowed(new Dictionary<string, object> { { "type", "reg_delete_tree" }, { "hive", "HKLM" }, { "key", "SOFTWARE" } })
             && !allowed(power("/delete 11111111-2222-3333-4444-555555555555")) && !allowed(power("/setactive x & calc")) && !allowed(new Dictionary<string, object> { { "type", "service_start" }, { "name", "OtroServicio" } }),
             "journal rejects anything the catalog never touches");
+        Func<object, Dictionary<string, object>> startValue = v => { var o = reg("HKLM", @"SYSTEM\CurrentControlSet\Services\DiagTrack", "Start"); o["value"] = v; return o; };
+        Check(allowed(startValue(2)) && allowed(startValue(4)) && !allowed(startValue(0)) && !allowed(startValue(1)) && !allowed(startValue(7)), "a service start type comes back only as automatic, manual or disabled, never boot or system");
+        var asText = startValue("2"); asText["kind"] = "String";
+        var asNone = reg("HKLM", @"SYSTEM\CurrentControlSet\Services\DiagTrack", "Start"); asNone["kind"] = "None";
+        Check(!allowed(asText) && !allowed(asNone), "a service start type must stay a DWORD, and no value may come back with an unknown type");
+        Check((bool)Call("IsAllowedRestoreOp", reg("HKLM", @"SYSTEM\CurrentControlSet\Services\DiagTrack", "Start")) && Field("_catalogOps") != null, "the catalog's operations are listed once and reused");
 
         // One system change at a time, across windows too.
         Check((bool)Call("TryBeginSystemChange", "Prueba") && !(bool)Call("TryBeginSystemChange", "Prueba"), "a second system change waits for the one in progress");
@@ -1538,7 +1704,7 @@ internal static class NativeUiSelfCheck
                 bool undone = undo.Any(u => Convert.ToString(get(u, "hive")) == hive && (Convert.ToString(u["type"]) == "reg_delete_tree"
                     ? (key + "\\").StartsWith(Convert.ToString(get(u, "key")) + "\\", StringComparison.OrdinalIgnoreCase)
                     : string.Equals(Convert.ToString(get(u, "key")), key, StringComparison.OrdinalIgnoreCase) && string.Equals(Convert.ToString(get(u, "name") ?? ""), name, StringComparison.OrdinalIgnoreCase)));
-                var restore = new Dictionary<string, object> { { "type", "reg_value" }, { "hive", hive }, { "key", key }, { "name", name }, { "kind", "DWord" }, { "value", 0 } };
+                var restore = new Dictionary<string, object> { { "type", "reg_value" }, { "hive", hive }, { "key", key }, { "name", name }, { "kind", "DWord" }, { "value", 3 } };
                 var remove = new Dictionary<string, object> { { "type", "reg_delete" }, { "hive", hive }, { "key", key }, { "name", name } };
                 if (!undone || !(bool)Call("IsAllowedRestoreOp", restore) || !(bool)Call("IsAllowedRestoreOp", remove)) missing.Add(t["id"] + ": " + hive + "\\" + key + " › " + name);
             }
@@ -1938,6 +2104,52 @@ internal static class NativeUiSelfCheck
             Check(counted == 1000 && untouched && freed == 1000 && !File.Exists(old) && File.Exists(fresh), "cleanup counts first, then deletes only files older than a day");
         }
         finally { Directory.Delete(dir, true); }
+
+        // Installed-app detection uses the names Windows really lists, anchored so a similar name is not taken for it.
+        var catalogApps = (List<Dictionary<string, object>>)Field("_apps");
+        Func<string, string, bool> detects = (appId, displayName) => (bool)_type.GetMethod("AppNameMatches", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { catalogApps.First(a => Convert.ToString(a["id"]) == appId), displayName });
+        Check(detects("rustup", "Rustup: the Rust toolchain installer") && !detects("rustup", "RustDesk") && !detects("rustup", "Rust"), "rustup is found by its own name, never by RustDesk or the Rust game");
+        Check(detects("steam", "Steam") && !detects("steam", "Steam Mover") && detects("discord", "Discord") && !detects("discord", "Discord PTB Helper"), "Steam and Discord need their exact names");
+        Check(detects("everything", "Everything 1.4.1.1026 (x64)") && !detects("everything", "Everything Toolbar"), "Everything needs its version after the name");
+        Check(detects("vcredist_2015_2022_x64", "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.40.33810") && detects("vcredist_2015_2022_x64", "Microsoft Visual C++ v14 Redistributable (x64) - 14.50.35719") && !detects("vcredist_2015_2022_x64", "Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.40.33810"), "the x64 runtime is found under both its old and new names, never the x86 one");
+        Check(!detects("directx_enduser", "DirectX") && Convert.ToString(catalogApps.First(a => Convert.ToString(a["id"]) == "directx_enduser")["detectFile"]).EndsWith("d3dx9_43.dll"), "DirectX is detected by its runtime file, since it leaves no uninstall entry");
+
+        // The global search also looks at the catalog's tags and short texts.
+        MethodInfo matchesQuery = _type.GetMethod("TweakMatchesQuery", BindingFlags.Static | BindingFlags.NonPublic);
+        var catalogTweaks = (List<Dictionary<string, object>>)Field("_tweaks");
+        Func<string, List<string>> search = q => catalogTweaks.Where(t => (bool)matchesQuery.Invoke(null, new object[] { t, q })).Select(t => Convert.ToString(t["id"])).ToList();
+        Check(search("candy crush").Contains("debloat_consumer_features") && search("BLOATWARE").Count > 0 && search("   ").Count == 0, "search finds tweaks by their tags, ignoring case and blank queries");
+        Check(catalogApps.All(a => !a.ContainsKey("iconUrl") && !a.ContainsKey("accentColor")), "the apps catalog no longer carries fields nothing reads");
+
+        // A direct download runs as administrator only when the catalog's publisher signed it.
+        MethodInfo signerMatches = _type.GetMethod("SignerMatches", BindingFlags.Static | BindingFlags.NonPublic);
+        var signed = new Dictionary<string, object> { { "signer", "Google LLC" } };
+        Check((bool)signerMatches.Invoke(null, new object[] { signed, "Google LLC" }) && !(bool)signerMatches.Invoke(null, new object[] { signed, "Evil Corp LLC" }) && !(bool)signerMatches.Invoke(null, new object[] { signed, null }) && !(bool)signerMatches.Invoke(null, new object[] { new Dictionary<string, object>(), "Google LLC" }), "the installer's signer must be exactly the catalog's publisher");
+        Check(catalogApps.All(a => !a.ContainsKey("fallbackUrl") || Convert.ToString(a["fallbackUrl"]).Length == 0 || (a.ContainsKey("signer") && Convert.ToString(a["signer"]).Length > 0)), "every direct download names the publisher that must sign it");
+        string unsignedSigner = (string)_type.Assembly.GetType("Blackwall.Authenticode", true).GetMethod("SignerName").Invoke(null, new object[] { _type.Assembly.Location });
+        Check(unsignedSigner == null, "a file without an embedded signature has no signer");
+
+        // A folder link inside Temp must never lead the cleanup into the folder it points to.
+        string temp = Path.Combine(Path.GetTempPath(), "BlackwallSelfCheck-" + Guid.NewGuid().ToString("N")), victim = temp + "-destino", link = Path.Combine(temp, "enlace");
+        Directory.CreateDirectory(temp); Directory.CreateDirectory(victim);
+        try
+        {
+            string precious = Path.Combine(victim, "documento.txt"), own = Path.Combine(temp, "viejo.tmp");
+            File.WriteAllBytes(precious, new byte[700]); File.WriteAllBytes(own, new byte[300]);
+            File.SetLastWriteTime(precious, DateTime.Now.AddDays(-3)); File.SetLastWriteTime(own, DateTime.Now.AddDays(-3));
+            using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + link + "\" \"" + victim + "\"") { UseShellExecute = false, CreateNoWindow = true }))
+                mklink.WaitForExit(10000);
+            Check(Directory.Exists(link) && (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0, "fixture: a real folder link sits inside the temp folder");
+            var clean = _type.GetMethod("DeleteOldTempFiles", BindingFlags.Static | BindingFlags.NonPublic);
+            long counted = (long)clean.Invoke(null, new object[] { temp, DateTime.Now.AddDays(-1), true });
+            long freed = (long)clean.Invoke(null, new object[] { temp, DateTime.Now.AddDays(-1), false });
+            Check(counted == 300 && freed == 300 && File.Exists(precious) && !File.Exists(own), "cleanup never follows a folder link out of the temp folder");
+        }
+        finally
+        {
+            if (Directory.Exists(link)) Directory.Delete(link, false);
+            Directory.Delete(temp, true); Directory.Delete(victim, true);
+        }
     }
 
     // WinUtil and Ceito: no duplicated values, preferences wait for their button, Ceito never applies, its wizard

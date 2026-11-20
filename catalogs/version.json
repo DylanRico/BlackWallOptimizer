@@ -1,14 +1,14 @@
 {
-  "appVersion": "1.5.1",
+  "appVersion": "1.5.2",
   "updateManifestUrl": "https://raw.githubusercontent.com/DylanRico/BlackWallOptimizer/main/catalogs/update.json",
   "changelog": [
-    "Novedades: Notas de versión rediseñadas: la versión se ve en el título y los cambios se ordenan por temas en dos columnas, sin desplazarse.",
-    "Novedades: Las notas de la versión instalada están a un clic de las de la versión nueva.",
-    "Novedades: Botones y avisos siempre visibles al pie; la firma verificada se indica de forma más clara.",
-    "Interfaz: Botones de minimizar, maximizar y cerrar con los iconos de Windows, más compactos y con resaltado al usar el teclado.",
-    "Interfaz: El botón de cerrar del aviso de actualización es igual al de la ventana principal.",
-    "Actualizaciones: Junto a la app queda un solo respaldo; los anteriores se borran al confirmar que la versión nueva arranca.",
-    "Actualizaciones: Los archivos de control se borran solos al terminar y el respaldo queda oculto.",
-    "Incluye todo lo de 1.5.0: WinUtil, reversión real, energía segura, quitar apps preinstaladas, Secure Boot y caché en MB."
+    "Seguridad: Limpieza temporal sin seguir enlaces (junctions) ni salir de Windows\\Temp al ejecutar con otra cuenta.",
+    "Seguridad: Diario duradero con validación por valor, reversión automática ante fallos a medias y bloqueo de Inicio HKCU ajeno.",
+    "Software: Descargas directas verificadas por firmante Authenticode esperado, detección anclada y bloqueo de apps por usuario en otra cuenta.",
+    "Software: WinGet reconoce el código «ya está al día» (-1978335189), los lotes cuentan éxitos reales y limpian errores al reintentar.",
+    "Hardware: Detección SMBIOS oficial para LPDDR3/4/5 y memoria soldada, mostrando N/D o Sin informar si WMI omite datos.",
+    "Mantenimiento: SFC, DISM y caché DNS bloquean doble clic simultáneo y la compilación conserva solo los 3 respaldos más recientes.",
+    "Interfaz: Cabecera sin recortes con tooltip completo, buscador Ctrl+K con títulos cortos y riesgos en español.",
+    "Interfaz: Sin glifo roto en DISM, subtítulo SRSetRestorePointW, botones adaptables y pie ámbar coherente en tarjetas parciales."
   ]
 }

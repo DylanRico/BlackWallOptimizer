@@ -89,9 +89,14 @@ try {
     if (Test-Path -LiteralPath $OutputPath) {
         $backupFolder = Join-Path $projectRoot 'artifacts\build-backups'
         New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
-        $backup = Join-Path $backupFolder (([IO.Path]::GetFileName($OutputPath)) + '.' + [Guid]::NewGuid().ToString('N') + '.bak')
+        $targetName = [IO.Path]::GetFileName($OutputPath)
+        $backup = Join-Path $backupFolder ($targetName + '.' + [Guid]::NewGuid().ToString('N') + '.bak')
         try { [IO.File]::Replace($stagedExe, $OutputPath, $backup) }
         catch { throw ('No se pudo reemplazar el ejecutable. Cierra la aplicacion y vuelve a compilar. ' + $_.Exception.Message) }
+        Get-ChildItem -LiteralPath $backupFolder -Filter ($targetName + '.*.bak') -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -Skip 3 |
+            Remove-Item -Force -ErrorAction SilentlyContinue
     } else { [IO.File]::Move($stagedExe, $OutputPath) }
 } finally {
     # Only this build's own GUID folder is removed; other builds and artifacts are never touched.

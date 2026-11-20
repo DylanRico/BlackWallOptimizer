@@ -117,13 +117,13 @@ namespace Blackwall
     public static class OtaDownload
     {
         // Redirects are followed explicitly so HTTPS cannot silently downgrade to HTTP.
-        public static Task Fetch(string url, string output, long maximum, long expected, Action<long, long> progress, CancellationToken cancel)
+        public static Task Fetch(string url, string output, long maximum, long expected, Action<long, long> progress, CancellationToken cancel, int deadlineMs = 120000)
         {
             return Task.Run(() =>
             {
                 using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel))
                 {
-                deadline.CancelAfter(120000);
+                deadline.CancelAfter(deadlineMs);
                 Uri uri = OtaProtocol.Https(url);
                 for (int redirect = 0; redirect <= 5; redirect++)
                 {

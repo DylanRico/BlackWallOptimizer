@@ -59,6 +59,17 @@ namespace Blackwall
             public uint dwProvFlags; public uint dwUIContext; public IntPtr pSignatureSettings;
         }
 
+        // The signing certificate's own name ("Google LLC"), or null when the file carries no embedded signature.
+        public static string SignerName(string path)
+        {
+            try
+            {
+                using (var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path)))
+                    return cert.GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false);
+            }
+            catch (System.Security.Cryptography.CryptographicException) { return null; }
+        }
+
         public static bool IsTrusted(string path)
         {
             var file = new TrustFile { cbStruct = (uint)Marshal.SizeOf(typeof(TrustFile)), pcwszFilePath = path };
@@ -70,6 +81,34 @@ namespace Blackwall
                 return WinVerifyTrust(new IntPtr(-1), new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE") /* GENERIC_VERIFY_V2 */, ref data) == 0;
             }
             finally { Marshal.DestroyStructure(filePtr, typeof(TrustFile)); Marshal.FreeHGlobal(filePtr); }
+        }
+    }
+
+    // Who is signed in to this Windows session (DOMAIN\user). When UAC asked for another administrator's password,
+    // Blackwall runs as that account and its HKCU is not the person's own.
+    internal static class SessionUser
+    {
+        [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool WTSQuerySessionInformationW(IntPtr server, int sessionId, int infoClass, out IntPtr buffer, out int bytes);
+        [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(IntPtr memory);
+
+        private static string Query(int infoClass)
+        {
+            IntPtr buffer; int bytes;
+            if (!WTSQuerySessionInformationW(IntPtr.Zero, -1 /* this session */, infoClass, out buffer, out bytes)) return null;
+            try { return Marshal.PtrToStringUni(buffer); }
+            finally { WTSFreeMemory(buffer); }
+        }
+
+        public static string Name()
+        {
+            try
+            {
+                string user = Query(5 /* WTSUserName */), domain = Query(7 /* WTSDomainName */);
+                return string.IsNullOrEmpty(user) ? null : (string.IsNullOrEmpty(domain) ? user : domain + "\\" + user);
+            }
+            catch (DllNotFoundException) { return null; }
+            catch (EntryPointNotFoundException) { return null; }
         }
     }
 
@@ -778,68 +817,6 @@ namespace Blackwall
         }
     }
 
-    // A small isolated drawing surface keeps the moving circuit away from text/layout.
-    public class EnergyTrace : FrameworkElement
-    {
-        private static readonly Pen BasePen = CreatePen(Color.FromArgb(100, 143, 24, 40), 1);
-        private static readonly Pen HotPen = CreatePen(Color.FromArgb(210, 239, 104, 120), 1.4);
-        private static readonly SolidColorBrush[] ChargeInk = CreateChargeInk();
-        private static Pen CreatePen(Color color, double width) { var pen = new Pen(new SolidColorBrush(color), width); pen.Freeze(); return pen; }
-        private static SolidColorBrush[] CreateChargeInk()
-        {
-            var brushes = new SolidColorBrush[8];
-            for (int i = 0; i < brushes.Length; i++) { brushes[i] = new SolidColorBrush(Color.FromArgb((byte)(190 - i * 22), 255, 91, 121)); brushes[i].Freeze(); }
-            return brushes;
-        }
-        private readonly DispatcherTimer _timer;
-        private readonly Stopwatch _clock = Stopwatch.StartNew();
-        public bool Vertical { get; set; }
-        public bool Running { get { return _timer.IsEnabled; } }
-        public EnergyTrace()
-        {
-            IsHitTestVisible = false;
-            ClipToBounds = true;
-            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
-            _timer.Tick += (s, e) => InvalidateVisual();
-            Unloaded += (s, e) => SetRunning(false);
-        }
-        public void SetRunning(bool running)
-        {
-            if (running) _timer.Start(); else _timer.Stop();
-            InvalidateVisual();
-        }
-        protected override void OnRender(DrawingContext drawing)
-        {
-            base.OnRender(drawing);
-            double length = Vertical ? ActualHeight : ActualWidth;
-            double cross = Vertical ? ActualWidth : ActualHeight;
-            if (length <= 0 || cross <= 0) return;
-            double time = Running ? _clock.Elapsed.TotalSeconds : 0;
-            Func<double, double, Point> point = (along, across) => Vertical ? new Point(across, along) : new Point(along, across);
-            Point previous = point(0, cross / 2);
-            for (int i = 1; i <= 36; i++)
-            {
-                double along = length * i / 36;
-                double offset = i % 4 == 0 ? cross * 0.26 : i % 4 == 1 ? -cross * 0.26 : 0;
-                Point next = point(along, cross / 2 + offset);
-                drawing.DrawLine(BasePen, previous, next);
-                previous = next;
-            }
-            if (!Running) return;
-            for (int charge = 0; charge < 3; charge++)
-            {
-                double head = ((time * 0.13 + charge / 3.0) % 1) * length;
-                for (int tail = 0; tail < 8; tail++)
-                {
-                    double position = head - tail * 4;
-                    if (position < 0) continue;
-                    drawing.DrawEllipse(ChargeInk[tail], null, point(position, cross / 2 + Math.Sin(position / length * Math.PI * 12) * cross * 0.18), tail == 0 ? 2.4 : 1.4, tail == 0 ? 2.4 : 1.4);
-                }
-                drawing.DrawLine(HotPen, point(Math.Max(0, head - 14), cross / 2), point(head, cross / 2));
-            }
-        }
-    }
-
     public class MainWindow : Window
     {
         // Paleta dinámica (Modo Cyberpunk Muro Negro / Modo Arasaka Claro)
@@ -853,7 +830,6 @@ namespace Blackwall
         private SolidColorBrush TextSecondary;
         private SolidColorBrush AccentBrush;
         private SolidColorBrush CyberCyanBrush;
-        private SolidColorBrush CyberYellowBrush;
         private SolidColorBrush RiskLowBg;
         private SolidColorBrush RiskLowText;
         private SolidColorBrush RiskMedBg;
@@ -872,6 +848,19 @@ namespace Blackwall
         private Button _installSelectedButton;
         // Every change Blackwall makes is journaled with the exact prior values, so it can be undone without a restore point.
         private string _changesPath;
+        // The session's own account when Blackwall runs as a different one; null when they are the same or unknown.
+        private string _sessionAccount;
+
+        internal static bool IsOtherAccount(string sessionUser, string processUser)
+        {
+            return !string.IsNullOrEmpty(sessionUser) && !string.IsNullOrEmpty(processUser) && !string.Equals(sessionUser, processUser, StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool TouchesUserHive(Dictionary<string, object> tweak)
+        {
+            object ops;
+            return tweak.TryGetValue("applyOps", out ops) && ops is IEnumerable && ((IEnumerable)ops).OfType<Dictionary<string, object>>().Any(op => op.ContainsKey("hive") && Convert.ToString(op["hive"]) == "HKCU");
+        }
         private List<Dictionary<string, object>> _changes = new List<Dictionary<string, object>>();
         private Dictionary<string, object> _restorePointRecord;
         private bool _restorePointDialogOpen;
@@ -974,8 +963,6 @@ namespace Blackwall
         private Button _motionToggle;
         private readonly List<FrameworkElement> _expandedSidebarElements = new List<FrameworkElement>();
         private readonly List<SmoothScrollViewer> _scrollViewers = new List<SmoothScrollViewer>();
-        private EnergyTrace _headerEnergy;
-        private EnergyTrace _sidebarEnergy;
         private readonly List<FrameworkElement> _motionEntrances = new List<FrameworkElement>();
         private readonly HashSet<FrameworkElement> _revealedCards = new HashSet<FrameworkElement>();
         private List<FrameworkElement> _pageMotionCards = new List<FrameworkElement>();
@@ -1015,6 +1002,8 @@ namespace Blackwall
             _confirmRestart = ConfirmRestart;
             _runShutdown = args => { int code; RunSystemToolDirect("shutdown.exe", args, out code, 15000); return code == 0; };
             _changesPath = Path.Combine(Path.GetDirectoryName(preferencesPath), "cambios.json");
+            string session = SessionUser.Name();
+            _sessionAccount = IsOtherAccount(session, WindowsIdentity.GetCurrent().Name) ? session : null;
             LoadUiPreferences();
             bool isAdmin = IsAdministrator();
             Title = "Blackwall — Muro Negro" + (isAdmin ? " [ADMINISTRADOR]" : " [Modo Estándar]");
@@ -1077,8 +1066,6 @@ namespace Blackwall
                 SystemParameters.StaticPropertyChanged -= OnSystemMotionChanged;
                 _scriptMonitorTimer.Stop();
                 if (_logoHalo != null) _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, null);
-                if (_headerEnergy != null) _headerEnergy.SetRunning(false);
-                if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(false);
                 if (_network != null) _network.SetRunning(false);
                 SetDashboardEdgeMotion(false);
                 SetCeitoMotion(false);
@@ -1155,7 +1142,7 @@ namespace Blackwall
         internal void ShowUnexpectedError(string message)
         {
             AppendLog("Error inesperado: " + message, "ERROR");
-            SetStatus("🔴 Error inesperado: " + message, "Detalles en errores.log");
+            SetStatus("✕ Error inesperado: " + message, "Detalles en errores.log");
         }
 
         private void LoadJournal()
@@ -1182,9 +1169,23 @@ namespace Blackwall
             return ((IEnumerable)raw).Cast<object>().All(item => item is Dictionary<string, object> && IsAllowedRestoreOp((Dictionary<string, object>)item));
         }
 
+        // Built once per catalog instead of once per journal operation.
+        private List<Dictionary<string, object>> _catalogOps;
+        private object _catalogOpsSource;
+
+        private List<Dictionary<string, object>> CatalogOps()
+        {
+            if (_catalogOps == null || !ReferenceEquals(_catalogOpsSource, _tweaks))
+            {
+                _catalogOps = _tweaks.SelectMany(t => ConvertToDictList(t.ContainsKey("applyOps") ? t["applyOps"] : null).Concat(ConvertToDictList(t.ContainsKey("undoOps") ? t["undoOps"] : null))).ToList();
+                _catalogOpsSource = _tweaks;
+            }
+            return _catalogOps;
+        }
+
         internal bool IsAllowedRestoreOp(Dictionary<string, object> op)
         {
-            var catalog = _tweaks.SelectMany(t => ConvertToDictList(t.ContainsKey("applyOps") ? t["applyOps"] : null).Concat(ConvertToDictList(t.ContainsKey("undoOps") ? t["undoOps"] : null))).ToList();
+            var catalog = CatalogOps();
             var ignore = StringComparison.OrdinalIgnoreCase;
             string type = GetStr(op, "type");
             if (type == "appx_install") return IsAllowedAppxPackage(GetStr(op, "name"));
@@ -1192,6 +1193,18 @@ namespace Blackwall
             {
                 string hive = GetStr(op, "hive"), key = GetStr(op, "key"), name = GetStr(op, "name");
                 if (hive != "HKLM" && hive != "HKCU") return false;
+                if (type == "reg_value")
+                {
+                    // The place alone is not enough: a value must come back with a type Blackwall can write, and a
+                    // service only as automatic (2), manual (3) or disabled (4), never as a boot or system driver.
+                    RegistryValueKind kind;
+                    if (!Enum.TryParse(GetStr(op, "kind"), out kind) || kind == RegistryValueKind.None || kind == RegistryValueKind.Unknown) return false;
+                    if (hive == "HKLM" && name.Equals("Start", ignore) && Regex.IsMatch(key, @"^SYSTEM\\CurrentControlSet\\Services\\[^\\]+$", RegexOptions.IgnoreCase))
+                    {
+                        long start;
+                        if (kind != RegistryValueKind.DWord || !long.TryParse(Convert.ToString(op["value"], System.Globalization.CultureInfo.InvariantCulture), out start) || start < 2 || start > 4) return false;
+                    }
+                }
                 // A startup program's on/off switch: harmless to put back, whatever the program is called.
                 if (IsStartupApprovedKey(key) && (type == "reg_delete" || GetStr(op, "kind") == "Binary")) return true;
                 return catalog.Any(c => GetStr(c, "hive") == hive && (GetStr(c, "type") == "reg_delete_tree"
@@ -1258,7 +1271,9 @@ namespace Blackwall
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_changesPath));
             string temp = _changesPath + ".tmp";
-            File.WriteAllText(temp, _json.Serialize(new Dictionary<string, object> { { "restorePoint", _restorePointRecord }, { "changes", _changes } }));
+            // Flushed to the disk before it replaces the journal: a power cut right after a change never leaves it empty.
+            byte[] bytes = new UTF8Encoding(false).GetBytes(_json.Serialize(new Dictionary<string, object> { { "restorePoint", _restorePointRecord }, { "changes", _changes } }));
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes, 0, bytes.Length); stream.Flush(true); }
             if (File.Exists(_changesPath)) File.Replace(temp, _changesPath, null);
             else File.Move(temp, _changesPath);
         }
@@ -1320,8 +1335,6 @@ namespace Blackwall
             SetDashboardEdgeMotion(MotionAllowed && IsVisible && IsActive && WindowState != WindowState.Minimized && _activeTab == "hardware");
             SetScanEdgeMotion(MotionAllowed && IsVisible && IsActive && WindowState != WindowState.Minimized && _activeTab == "hardware" && _readTasks.ContainsKey("hardware"));
             SetCeitoMotion(MotionAllowed && IsVisible && IsActive && WindowState != WindowState.Minimized && _activeTab == "ceito" && !_ceitoUnlocked);
-            if (_headerEnergy != null) _headerEnergy.SetRunning(false);
-            if (_sidebarEnergy != null) _sidebarEnergy.SetRunning(false);
             if (_logoHalo != null)
             {
                 _logoHalo.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, null);
@@ -1931,13 +1944,16 @@ namespace Blackwall
                     { "l2CacheKb", GetWmiInt(cpu, "L2CacheSize", 0) },
                     { "l3CacheKb", GetWmiInt(cpu, "L3CacheSize", 0) },
                     { "virtualizationEnabled", GetWmiBool(cpu, "VirtualizationFirmwareEnabled", true) },
-                    { "loadPercent", GetWmiInt(cpu, "LoadPercentage", 5) }
+                    { "loadPercent", GetWmiInt(cpu, "LoadPercentage", -1) }
                 };
 
-                var memArray = QueryFirstWmi("root\\CIMV2", "SELECT MemoryDevices FROM Win32_PhysicalMemoryArray");
+                var memArrays = QueryAllWmi("root\\CIMV2", "SELECT MemoryDevices, Use FROM Win32_PhysicalMemoryArray");
+                var memArray = memArrays.FirstOrDefault(a => GetWmiInt(a, "Use", 0) == 3) ?? (memArrays.Count > 0 ? memArrays[0] : new Dictionary<string, object>());
                 ReportReadProgress("hardware", 3, 8, "Procesador · 3/8");
-                var sticks = QueryAllWmi("root\\CIMV2", "SELECT DeviceLocator, BankLabel, Capacity, ConfiguredClockSpeed, Speed, SMBIOSMemoryType, Manufacturer, PartNumber, SerialNumber, ConfiguredVoltage FROM Win32_PhysicalMemory");
-                int totalSlots = Math.Max(GetWmiInt(memArray, "MemoryDevices", sticks.Count), Math.Max(sticks.Count, 2));
+                var sticks = QueryAllWmi("root\\CIMV2", "SELECT DeviceLocator, BankLabel, Capacity, ConfiguredClockSpeed, Speed, SMBIOSMemoryType, FormFactor, Manufacturer, PartNumber, SerialNumber, ConfiguredVoltage FROM Win32_PhysicalMemory");
+                bool allSoldered = sticks.Count > 0 && sticks.All(st => IsSolderedFormFactor(GetWmiInt(st, "FormFactor", 0)));
+                int reportedDevices = GetWmiInt(memArray, "MemoryDevices", sticks.Count);
+                int totalSlots = allSoldered ? sticks.Count : Math.Max(reportedDevices, sticks.Count);
 
                 var slotsList = new List<Dictionary<string, object>>();
                 int idx = 1;
@@ -1946,8 +1962,8 @@ namespace Blackwall
                     long capBytes = GetWmiLong(st, "Capacity", 0);
                     double capGb = Math.Round(capBytes / (1024.0 * 1024.0 * 1024.0), 2);
                     int speed = GetWmiInt(st, "ConfiguredClockSpeed", GetWmiInt(st, "Speed", 0));
-                    int typeCode = GetWmiInt(st, "SMBIOSMemoryType", 26);
-                    string mType = typeCode == 34 || typeCode == 35 ? "DDR5" : typeCode == 24 ? "DDR3" : "DDR4";
+                    int typeCode = GetWmiInt(st, "SMBIOSMemoryType", 0);
+                    string mType = FormatSmbiosMemoryType(typeCode);
 
                     slotsList.Add(new Dictionary<string, object>
                     {
@@ -1960,7 +1976,7 @@ namespace Blackwall
                         { "manufacturer", GetWmiStr(st, "Manufacturer", "OEM").Trim() },
                         { "partNumber", GetWmiStr(st, "PartNumber", "N/A").Trim() },
                         { "serialNumber", GetWmiStr(st, "SerialNumber", "N/A").Trim() },
-                        { "voltageMv", GetWmiInt(st, "ConfiguredVoltage", 1200) }
+                        { "voltageMv", GetWmiInt(st, "ConfiguredVoltage", 0) }
                     });
                     idx++;
                 }
@@ -1988,7 +2004,7 @@ namespace Blackwall
                 double freeRamGb = Math.Round(GetWmiLong(osInfo, "FreePhysicalMemory", 0) / (1024.0 * 1024.0), 2);
                 double usedRamGb = Math.Round(totalRamGb - freeRamGb, 2);
                 int ramPct = totalRamGb > 0 ? (int)Math.Round((usedRamGb / totalRamGb) * 100.0) : 0;
-                string channelMode = sticks.Count >= 4 ? "Quad/Dual Channel (4 Módulos)" : sticks.Count == 2 ? "Dual Channel Activo" : "Single Channel";
+                string channelMode = FormatChannelMode(sticks.Count, allSoldered);
 
                 result["memory"] = new Dictionary<string, object>
                 {
@@ -1997,7 +2013,7 @@ namespace Blackwall
                     { "availableGb", freeRamGb },
                     { "usagePercent", ramPct },
                     { "speedMhz", slotsList.Count > 0 ? slotsList[0]["speedMhz"] : 0 },
-                    { "memoryType", slotsList.Count > 0 ? slotsList[0]["memType"] : "DDR4" },
+                    { "memoryType", slotsList.Count > 0 ? slotsList[0]["memType"] : "Sin especificar" },
                     { "channelMode", channelMode },
                     { "totalSlots", totalSlots },
                     { "occupiedSlots", sticks.Count },
@@ -2195,9 +2211,10 @@ namespace Blackwall
             if (_deviceBadgeText != null)
             {
                 _deviceBadgeText.Text = FormatChassisHeader(chassisDict);
+                _deviceBadgeText.ToolTip = _deviceBadgeText.Text;
             }
             AppendLog("Auditoría WMI nativa completada en " + sw.ElapsedMilliseconds + " ms.", "WMI-NATIVE");
-            SetStatus("🟢 Hardware auditado en " + sw.ElapsedMilliseconds + " ms (100% Nativo C#)", "Listo");
+            SetStatus("● Hardware auditado en " + sw.ElapsedMilliseconds + " ms (100% Nativo C#)", "Listo");
 
         }
 
@@ -2252,11 +2269,15 @@ namespace Blackwall
                 foreach (var a in _apps)
                 {
                     string id = GetStr(a, "id");
-                    string pat = GetStr(a, "detectPattern");
-                    if (string.IsNullOrEmpty(pat)) pat = GetStr(a, "name");
-
-                    Regex rx = new Regex(pat, RegexOptions.IgnoreCase);
-                    var match = foundEntries.FirstOrDefault(kv => rx.IsMatch(kv.Key));
+                    string file = GetStr(a, "detectFile");
+                    if (file.Length > 0)
+                    {
+                        bool present = File.Exists(Environment.ExpandEnvironmentVariables(file));
+                        appMap[id] = new Dictionary<string, object> { { "installed", present }, { "version", present ? "Instalado" : "" } };
+                        continue;
+                    }
+                    var app = a;
+                    var match = foundEntries.FirstOrDefault(kv => AppNameMatches(app, kv.Key));
                     if (!string.IsNullOrEmpty(match.Key))
                     {
                         appMap[id] = new Dictionary<string, object> { { "installed", true }, { "version", match.Value } };
@@ -2269,6 +2290,15 @@ namespace Blackwall
                 _installedApps = appMap;
             });
 
+        }
+
+        // Anchored patterns from the catalog: "Rust" must not take RustDesk or the Rust game for rustup.
+        internal static bool AppNameMatches(Dictionary<string, object> app, string displayName)
+        {
+            object raw;
+            string pattern = app.TryGetValue("detectPattern", out raw) && raw != null ? Convert.ToString(raw) : "";
+            if (pattern.Length == 0) return false;
+            return Regex.IsMatch(displayName, pattern, RegexOptions.IgnoreCase);
         }
 
         private Task RefreshLiveScriptsNativeAsync(bool background = false)
@@ -2497,6 +2527,8 @@ $inventory = @(
             string unmet = apply && !id.StartsWith(StartupChangePrefix) ? UnmetRequirement(tweak) : null;
             if (unmet != null) throw new InvalidOperationException("«" + shortTitle + "» no es compatible con este equipo: " + unmet + ". No se cambió nada.");
             if (apply && IsFrozen(tweak)) throw new InvalidOperationException("Ceito está en pausa: sus ajustes solo se pueden revertir. No se cambió nada.");
+            if (apply && _sessionAccount != null && TouchesUserHive(tweak))
+                throw new InvalidOperationException("«" + shortTitle + "» cambia ajustes de tu usuario, pero Blackwall se abrió con otra cuenta (" + WindowsIdentity.GetCurrent().Name + "): se aplicaría a esa cuenta y no a " + _sessionAccount + ". No se cambió nada.");
             var transfers = new List<Action>();
             if (recorded.Count > 0) opsList = StartServicesLast(RestoreOpsFor(recorded, out transfers));
             // Without saved values, "Revertir" writes the catalog's values: those overwrite the user's own, so
@@ -2518,10 +2550,10 @@ $inventory = @(
                 }
             }
 
+            Dictionary<string, object> entry = null;
             if (journal)
             {
                 StepOperation(activity, "Guardando los valores actuales para poder revertirlo");
-                Dictionary<string, object> entry;
                 try
                 {
                     var restoreOps = await Task.Run(() =>
@@ -2543,7 +2575,7 @@ $inventory = @(
                 }
             }
 
-            SetStatus((apply ? "⚡ Aplicando nativamente: " : "↩️ Revirtiendo nativamente: ") + title, id);
+            SetStatus((apply ? "Aplicando nativamente: " : "Revirtiendo nativamente: ") + title, id);
 
             var failures = new List<string>();
             await Task.Run(() =>
@@ -2563,16 +2595,42 @@ $inventory = @(
                 }
             });
 
+            bool appxTweak = opsList.Any(o => GetStr(o, "type") == "appx_remove" || GetStr(o, "type") == "appx_install");
+            string undone = "";
+            if (failures.Count > 0 && apply && entry != null && !appxTweak)
+            {
+                // A tweak is all or nothing: what already changed goes back to the values saved a moment ago.
+                StepOperation(activity, "Deshaciendo lo que ya se cambió");
+                var saved = entry;
+                string undoError = await Task.Run(() =>
+                {
+                    string first = null;
+                    foreach (var op in ConvertToDictList(saved["restoreOps"]))
+                    {
+                        try { RunTweakOperation(op); LogOperation("DESHACER (falló a medias)", id, op, null); }
+                        catch (Exception ex) { LogOperation("DESHACER (falló a medias)", id, op, ex); if (first == null) first = DescribeTweakOperation(op) + ": " + ex.Message; }
+                    }
+                    return first;
+                });
+                if (undoError == null)
+                {
+                    _changes.Remove(entry);
+                    try { SaveJournal(); } catch (Exception ex) { AppendLog("No se pudo actualizar el registro de cambios: " + ex.Message, "warn", "Seguridad"); }
+                    undone = "; se deshizo lo que ya se había cambiado";
+                }
+                else AppendLog(shortTitle + ": no se pudo deshacer del todo (" + undoError + "); queda en «Revertir todo»", "warn", "Optimización");
+            }
+
             if (failures.Count > 0)
             {
                 // Never report success for a change Windows rejected: re-read the real state and surface the error.
                 _tweakStates[id] = await Task.Run(() => IsTweakActive(tweak));
-                if (opsList.Any(o => GetStr(o, "type") == "appx_remove" || GetStr(o, "type") == "appx_install") && await Task.Run(() => IsTweakTouched(tweak)))
+                if (appxTweak && await Task.Run(() => IsTweakTouched(tweak)))
                 {
                     _tweakStates[id] = true;
                     _tweakPartial.Add(id);
                 }
-                string error = failures.Count + " de " + opsList.Count + " cambios no se aplicaron (" + failures[0] + ")";
+                string error = failures.Count + " de " + opsList.Count + " cambios no se aplicaron (" + failures[0] + ")" + undone;
                 CompleteOperation(activity, false, shortTitle + ": " + error);
                 throw new InvalidOperationException(error);
             }
@@ -2590,7 +2648,7 @@ $inventory = @(
             CompleteOperation(activity, true, shortTitle + (apply ? ": aplicada" : recorded.Count > 0 ? ": valores anteriores restaurados" : ": revertida") + " (" + opsList.Count + " cambios)");
             _tweakStates[id] = apply || (recorded.Count > 0 && await Task.Run(() => IsTweakActive(tweak)));
             _tweakPartial.Remove(id);
-            SetStatus("🟢 " + (apply ? "Aplicado: " : "Revertido: ") + title, "Listo");
+            SetStatus("● " + (apply ? "Aplicado: " : "Revertido: ") + title, "Listo");
             Dispatcher.Invoke(() =>
             {
                 if (_tweakCardUpdaters.ContainsKey(id))
@@ -2639,11 +2697,47 @@ $inventory = @(
 
         // Some keys refuse writes even to an administrator (a system-protected policy, an organisation's policy or
         // an antivirus): .NET only says "Intento de realizar una operación no válida", so name the key and the cause.
+        // A write Windows accepts but does not keep (a policy, Tamper Protection or an antivirus puts it back) is a
+        // failure: the value is read again and must be exactly what was written.
         private void RunTweakOperation(Dictionary<string, object> op)
         {
             try { RunTweakOperationCore(op); }
             catch (UnauthorizedAccessException ex) { throw AccessRefused(op, ex); }
             catch (System.Security.SecurityException ex) { throw AccessRefused(op, ex); }
+            if (OperationHolds(op) == false)
+                throw new InvalidOperationException("Windows no conservó el cambio (ahora: " + CurrentValue(op) + "); puede impedirlo una directiva de la organización o un antivirus");
+        }
+
+        // True/false for registry ops (exact data and type); null when the op has nothing to read back here.
+        internal bool? OperationHolds(Dictionary<string, object> op)
+        {
+            string type = GetStr(op, "type");
+            if (type == "reg_dword" || type == "reg_sz" || type == "reg_value")
+            {
+                RegistryValueKind kind;
+                object data = RegistryData(op, out kind);
+                return RegistryValueIs(op, data, kind);
+            }
+            if (type == "reg_delete")
+                using (var k = TweakHive(op).OpenSubKey(GetStr(op, "key")))
+                    return k == null || !k.GetValueNames().Contains(GetStr(op, "name"), StringComparer.OrdinalIgnoreCase);
+            if (type == "reg_delete_tree")
+                using (var k = TweakHive(op).OpenSubKey(GetStr(op, "key"))) return k == null;
+            return null;
+        }
+
+        private object RegistryData(Dictionary<string, object> op, out RegistryValueKind kind)
+        {
+            string type = GetStr(op, "type");
+            if (type == "reg_dword") { kind = RegistryValueKind.DWord; return ToRegistryDword(op["value"]); }
+            if (type == "reg_sz") { kind = RegistryValueKind.String; return GetStr(op, "value"); }
+            kind = (RegistryValueKind)Enum.Parse(typeof(RegistryValueKind), GetStr(op, "kind"));
+            object raw = op["value"];
+            return kind == RegistryValueKind.DWord ? (object)ToRegistryDword(raw)
+                : kind == RegistryValueKind.QWord ? (object)Convert.ToInt64(raw, System.Globalization.CultureInfo.InvariantCulture)
+                : kind == RegistryValueKind.MultiString ? (object)((IEnumerable)raw).Cast<object>().Select(v => Convert.ToString(v)).ToArray()
+                : kind == RegistryValueKind.String || kind == RegistryValueKind.ExpandString ? (object)Convert.ToString(raw)
+                : Convert.FromBase64String(Convert.ToString(raw));
         }
 
         private Exception AccessRefused(Dictionary<string, object> op, Exception inner)
@@ -2670,14 +2764,15 @@ $inventory = @(
             string type = GetStr(op, "type");
             if (type == "appx_remove" || type == "appx_install") { RunAppxOperation(op); return; }
             if (type == "appx_restore") return; // Actual reinstalls come exclusively from the saved journal.
-            if ((type == "reg_dword" || type == "reg_sz") && RegistryValueIs(op, type == "reg_dword" ? (object)ToRegistryDword(op["value"]) : GetStr(op, "value"), type == "reg_dword" ? RegistryValueKind.DWord : RegistryValueKind.String)) return;
-            if (type == "reg_dword" || type == "reg_sz")
+            if (type == "reg_dword" || type == "reg_sz" || type == "reg_value")
             {
+                RegistryValueKind kind;
+                object data = RegistryData(op, out kind);
+                if (RegistryValueIs(op, data, kind)) return;
                 using (var k = TweakHive(op).CreateSubKey(GetStr(op, "key"), true))
                 {
                     if (k == null) throw new InvalidOperationException("No se pudo abrir la clave " + GetStr(op, "key"));
-                    if (type == "reg_dword") k.SetValue(GetStr(op, "name"), ToRegistryDword(op["value"]), RegistryValueKind.DWord);
-                    else k.SetValue(GetStr(op, "name"), GetStr(op, "value"), RegistryValueKind.String);
+                    k.SetValue(GetStr(op, "name"), data, kind);
                 }
             }
             else if (type == "reg_delete")
@@ -2708,22 +2803,6 @@ $inventory = @(
                 // Restoring a running service must really start it; a failure keeps the change journaled.
                 uint started = ControlServiceViaWmi(GetStr(op, "name"), "StartService");
                 if (started != 0 && started != 10) throw new InvalidOperationException("el servicio " + GetStr(op, "name") + " no se pudo iniciar (código WMI " + started + ")");
-            }
-            else if (type == "reg_value")
-            {
-                var kind = (RegistryValueKind)Enum.Parse(typeof(RegistryValueKind), GetStr(op, "kind"));
-                object raw = op["value"];
-                object data = kind == RegistryValueKind.DWord ? (object)ToRegistryDword(raw)
-                    : kind == RegistryValueKind.QWord ? (object)Convert.ToInt64(raw, System.Globalization.CultureInfo.InvariantCulture)
-                    : kind == RegistryValueKind.MultiString ? (object)((IEnumerable)raw).Cast<object>().Select(v => Convert.ToString(v)).ToArray()
-                    : kind == RegistryValueKind.String || kind == RegistryValueKind.ExpandString ? (object)Convert.ToString(raw)
-                    : Convert.FromBase64String(Convert.ToString(raw));
-                if (RegistryValueIs(op, data, kind)) return;
-                using (var k = TweakHive(op).CreateSubKey(GetStr(op, "key"), true))
-                {
-                    if (k == null) throw new InvalidOperationException("No se pudo abrir la clave " + GetStr(op, "key"));
-                    k.SetValue(GetStr(op, "name"), data, kind);
-                }
             }
             else throw new NotSupportedException("Tipo de operación desconocido: " + type);
         }
@@ -3003,6 +3082,8 @@ $inventory = @(
                     bool matches = type == "appx_remove" ? !GetBool(state, "installed") && !GetBool(state, "provisioned") : GetBool(state, "installed");
                     return matches ? "verificado" : "NO COINCIDE: " + name;
                 }
+                bool? holds = type == "reg_delete" ? null : OperationHolds(op);
+                if (holds.HasValue) return holds.Value ? "verificado" : "NO COINCIDE: ahora " + CurrentValue(op);
                 string now = CurrentValue(op);
                 if (now.Length == 0) return "sin relectura";
                 if (type == "reg_delete") return now == "(no existe)" ? "verificado: ya no existe" : "SIGUE EXISTIENDO: " + now;
@@ -3124,10 +3205,10 @@ $inventory = @(
             {
                 if (!_confirmPowerRepair() || !await EnsureRestorePointAsync()) return;
                 string folder = await RepairPowerPlanCoreAsync();
-                SetStatus("🟢 Plan Equilibrado nuevo activo. Copia de tus planes en " + folder, "Reinicia si notas el equipo lento");
+                SetStatus("● Plan Equilibrado nuevo activo. Copia de tus planes en " + folder, "Reinicia si notas el equipo lento");
                 RenderCurrentTab();
             }
-            catch (Exception ex) { SetStatus("🔴 No se pudo reparar el plan de energía: " + ex.Message, "Consulta Actividad"); AppendLog("Reparar plan de energía: " + ex.Message, "ERROR"); }
+            catch (Exception ex) { SetStatus("✕ No se pudo reparar el plan de energía: " + ex.Message, "Consulta Actividad"); AppendLog("Reparar plan de energía: " + ex.Message, "ERROR"); }
             finally { EndSystemChange(); }
         }
 
@@ -3355,9 +3436,9 @@ $inventory = @(
                 var change = new Dictionary<string, object> { { "id", StartupChangePrefix + GetStr(entry, "hive") + "\\" + GetStr(entry, "key") + "\\" + name }, { "title", title }, { "shortTitle", title },
                     { "applyOps", new List<Dictionary<string, object>> { new Dictionary<string, object> { { "type", "reg_value" }, { "hive", GetStr(entry, "hive") }, { "key", GetStr(entry, "key") }, { "name", name }, { "kind", "Binary" }, { "value", Convert.ToBase64String(data) } } } } };
                 await _executeTweakAction(change, true);
-                SetStatus("🟢 " + title, "Se aplica en el próximo inicio de sesión");
+                SetStatus("● " + title, "Se aplica en el próximo inicio de sesión");
             }
-            catch (Exception ex) { SetStatus("🔴 No se pudo cambiar «" + name + "»: " + ex.Message, "Consulta Actividad"); AppendLog(name + ": " + ex.Message, "ERROR"); }
+            catch (Exception ex) { SetStatus("✕ No se pudo cambiar «" + name + "»: " + ex.Message, "Consulta Actividad"); AppendLog(name + ": " + ex.Message, "ERROR"); }
             finally { EndSystemChange(); RenderCurrentTab(); }
         }
 
@@ -3371,13 +3452,28 @@ $inventory = @(
             catch (Exception ex) { entries = new List<Dictionary<string, object>>(); AppendLog("No se pudieron leer los programas de inicio: " + ex.Message, "warn", "Sistema"); }
             stack.Children.Add(new TextBlock { Text = "Programas de inicio · " + entries.Count(e => GetBool(e, "enabled")) + " de " + entries.Count + " se abren con Windows", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14 });
             stack.Children.Add(new TextBlock { Text = "Usa el mismo interruptor que el Administrador de tareas (Microsoft no documenta su formato): no borra nada y se puede revertir con «Revertir todo». Antes se comprueba el punto de restauración.", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 8) });
+            if (_sessionAccount != null)
+            {
+                stack.Children.Add(new Border
+                {
+                    BorderBrush = RiskHighText,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Margin = new Thickness(0, 0, 0, 8),
+                    Child = new TextBlock { Text = "Blackwall se abrió con la cuenta " + WindowsIdentity.GetCurrent().Name + ", pero la sesión es de " + _sessionAccount + ". Las entradas marcadas «Tu usuario» pertenecen a esa otra cuenta y no pueden cambiarse desde aquí.", Foreground = TextPrimary, FontSize = 12, TextWrapping = TextWrapping.Wrap }
+                });
+            }
             if (entries.Count == 0) stack.Children.Add(new TextBlock { Text = "No hay programas configurados para iniciarse con Windows.", Foreground = TextSecondary, FontSize = 12.3 });
             foreach (var e in entries)
             {
                 var entry = e;
                 bool on = GetBool(entry, "enabled");
+                bool otherUserEntry = _sessionAccount != null && GetStr(entry, "hive") == "HKCU";
                 var row = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
-                Button toggle = CreateStyledButton(on ? "Desactivar" : "Activar", !on);
+                Button toggle = CreateStyledButton(on ? "Desactivar" : "Activar", !on && !otherUserEntry);
+                toggle.IsEnabled = !otherUserEntry;
+                if (otherUserEntry) toggle.ToolTip = "Pertenece a otra cuenta; abre Blackwall desde la sesión de " + _sessionAccount;
                 toggle.Margin = new Thickness(8, 0, 0, 0);
                 toggle.Click += async (s, ev) => await RunUiActionAsync("startup", toggle, () => SetStartupEnabledAsync(entry, !on));
                 DockPanel.SetDock(toggle, Dock.Right);
@@ -3403,9 +3499,26 @@ $inventory = @(
         {
             long bytes = 0;
             if (!Directory.Exists(folder)) return 0;
-            IEnumerable<string> files;
-            try { files = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).ToList(); }
-            catch (Exception) { return 0; }
+            try { if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) return 0; }
+            catch (IOException) { return 0; }
+            catch (UnauthorizedAccessException) { return 0; }
+            // Walked by hand: .NET's recursive search enters folder links (junctions), and anything behind one in Temp
+            // could be another user's or the system's files deleted with administrator rights.
+            var files = new List<string>();
+            var pending = new Stack<string>();
+            pending.Push(folder);
+            while (pending.Count > 0)
+            {
+                string current = pending.Pop();
+                try
+                {
+                    files.AddRange(Directory.GetFiles(current));
+                    foreach (string sub in Directory.GetDirectories(current))
+                        if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) == 0) pending.Push(sub);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
             foreach (string file in files)
             {
                 try
@@ -3422,9 +3535,15 @@ $inventory = @(
             return bytes;
         }
 
+        internal static string[] TempFoldersForAccount(string sessionAccount, string userTemp, string winTemp)
+        {
+            if (!string.IsNullOrEmpty(sessionAccount)) return new[] { winTemp };
+            return new[] { userTemp, winTemp }.Where(p => !string.IsNullOrEmpty(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
         private IEnumerable<string> TempFolders()
         {
-            return new[] { Path.GetTempPath(), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp") }.Distinct(StringComparer.OrdinalIgnoreCase);
+            return TempFoldersForAccount(_sessionAccount, Path.GetTempPath(), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp"));
         }
 
         private long _tempBytes = -1;
@@ -3435,7 +3554,7 @@ $inventory = @(
             card.Margin = new Thickness(0, 0, 0, 14);
             var stack = new StackPanel();
             stack.Children.Add(new TextBlock { Text = "Liberar espacio", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14 });
-            stack.Children.Add(new TextBlock { Text = "Archivos temporales de más de un día (los que están en uso no se tocan) y la limpieza de componentes de Windows Update que documenta Microsoft, sin /ResetBase: las actualizaciones instaladas se pueden seguir desinstalando. Lo borrado no se puede recuperar.", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 8) });
+            stack.Children.Add(new TextBlock { Text = "Archivos temporales de más de un día (los que están en uso no se tocan) y la limpieza de componentes de Windows Update que documenta Microsoft, sin /ResetBase: las actualizaciones instaladas se pueden seguir desinstalando. Lo borrado no se puede recuperar." + (_sessionAccount != null ? " Con otra cuenta activa, solo se revisa Windows\\Temp (no tu %TEMP% personal)." : ""), Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 8) });
             var actions = new WrapPanel();
             Button temp = CreateStyledButton(_tempBytes < 0 ? "Calcular temporales" : "Borrar temporales (" + FormatBytes(_tempBytes) + ")", _tempBytes > 0);
             temp.Margin = new Thickness(0, 0, 8, 0);
@@ -3469,7 +3588,7 @@ $inventory = @(
             var activity = BeginOperation("Borrar archivos temporales", "Sistema", 1);
             long freed = await Task.Run(() => TempFolders().Sum(f => DeleteOldTempFiles(f, cutoff, false)));
             CompleteOperation(activity, true, FormatBytes(freed) + " liberados");
-            SetStatus("🟢 " + FormatBytes(freed) + " de temporales liberados", "Listo");
+            SetStatus("● " + FormatBytes(freed) + " de temporales liberados", "Listo");
             _tempBytes = -1;
             RenderCurrentTab();
         }
@@ -3489,7 +3608,7 @@ $inventory = @(
                 string last = (output ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
                 WriteChangeLog(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | #" + _changeSession + " | LIMPIEZA | dism | /Online /Cleanup-Image /StartComponentCleanup | " + (ok ? "OK" : "FALLO: código " + code) + " · " + last.Trim() + " | fuente: https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/clean-up-the-winsxs-folder");
                 CompleteOperation(activity, ok, ok ? "Componentes antiguos eliminados" : "DISM devolvió " + code + ": " + last.Trim());
-                SetStatus(ok ? "🟢 Limpieza de componentes completada" : "🔴 DISM devolvió " + code, ok ? "Listo" : last.Trim());
+                SetStatus(ok ? "● Limpieza de componentes completada" : "✕ DISM devolvió " + code, ok ? "Listo" : last.Trim());
             }
             finally { EndSystemChange(); }
         }
@@ -3514,7 +3633,7 @@ $inventory = @(
             string report = await Task.Run(() => BuildTweakStateReport());
             File.WriteAllText(file, report, new UTF8Encoding(true));
             AppendLog("Estado de los ajustes guardado en " + file, "SAFETY");
-            SetStatus("🟢 Estado de los ajustes guardado en el Escritorio", Path.GetFileName(file));
+            SetStatus("● Estado de los ajustes guardado en el Escritorio", Path.GetFileName(file));
         }
 
         // A tweak an older version applied only in part (one step failed) must still be revertible: it counts as
@@ -3605,7 +3724,7 @@ $inventory = @(
             uint result = uint.MaxValue;
             try
             {
-                using (var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Service WHERE Name='" + serviceName.Replace("'", "") + "'"))
+                using (var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_Service WHERE Name='" + serviceName.Replace("'", "") + "'"))
                 {
                     foreach (ManagementObject svc in searcher.Get())
                     {
@@ -3682,28 +3801,78 @@ $inventory = @(
         {
             try
             {
-                // 1. Ruta estándar por usuario (%LocalAppData%\Microsoft\WindowsApps\winget.exe)
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string candidate1 = Path.Combine(localAppData, @"Microsoft\WindowsApps\winget.exe");
-                if (File.Exists(candidate1)) return candidate1;
-
-                // Never another user's folder: anyone can drop a winget.exe there and Blackwall would run it as administrator.
-                // 2. Buscar en C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe
-                string winApps = @"C:\Program Files\WindowsApps";
+                // 1. The App Installer package itself (only TrustedInstaller can write there), newest version first.
+                string winApps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps");
                 if (Directory.Exists(winApps))
                 {
-                    foreach (string dir in Directory.GetDirectories(winApps, "Microsoft.DesktopAppInstaller*x64*"))
+                    foreach (string dir in Directory.GetDirectories(winApps, "Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe").OrderByDescending(d => d, StringComparer.Ordinal))
                     {
                         string cPkg = Path.Combine(dir, "winget.exe");
                         if (File.Exists(cPkg)) return cPkg;
                     }
                 }
             }
-            catch { }
-            return null;
+            catch (UnauthorizedAccessException) { } // Windows usually hides that folder's listing, even from administrators
+            catch (IOException) { }
+            // 2. The App Execution Alias in this user's profile. Never another user's folder: anyone could drop a
+            // winget.exe there and Blackwall would run it as administrator.
+            string alias = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WindowsApps\winget.exe");
+            return File.Exists(alias) ? alias : null;
         }
 
-        private async Task InstallSingleAppAsync(Dictionary<string, object> app)
+        private const long InstallerMaxBytes = 2L << 30; // 2 GB: the largest catalog installer is well under 1 GB
+
+        internal static bool SignerMatches(Dictionary<string, object> app, string signer)
+        {
+            object expected;
+            return signer != null && app.TryGetValue("signer", out expected) && expected != null && Convert.ToString(expected).Length > 0
+                && string.Equals(signer, Convert.ToString(expected), StringComparison.Ordinal);
+        }
+
+        internal static bool IsWingetSuccessCode(int code)
+        {
+            return code == 0 || code == -1978335189;
+        }
+
+        internal static string FormatSmbiosMemoryType(int typeCode)
+        {
+            switch (typeCode)
+            {
+                case 20: return "DDR";
+                case 21: return "DDR2";
+                case 24: return "DDR3";
+                case 26: return "DDR4";
+                case 27: return "LPDDR";
+                case 28: return "LPDDR2";
+                case 29: return "LPDDR3";
+                case 30: return "LPDDR4";
+                case 34: return "DDR5";
+                case 35: return "LPDDR5";
+                default: return "Sin especificar";
+            }
+        }
+
+        internal static bool IsSolderedFormFactor(int formFactor)
+        {
+            return formFactor == 13;
+        }
+
+        internal static string FormatChannelMode(int stickCount, bool soldered)
+        {
+            if (soldered) return stickCount > 1 ? "Memoria soldada (" + stickCount + " módulos/canales)" : "Memoria soldada";
+            if (stickCount >= 4) return "Multi-canal (" + stickCount + " módulos)";
+            if (stickCount == 3) return "Multi-canal asimétrico (3 módulos)";
+            if (stickCount == 2) return "Dual Channel (2 módulos)";
+            if (stickCount == 1) return "Single Channel (1 módulo)";
+            return "Sin datos";
+        }
+
+        private Task<bool> InstallSingleAppAsync(Dictionary<string, object> app)
+        {
+            return InstallSingleAppCoreAsync(app, true);
+        }
+
+        private async Task<bool> InstallSingleAppCoreAsync(Dictionary<string, object> app, bool refreshAfter)
         {
             string id = GetStr(app, "id");
             string name = GetStr(app, "name");
@@ -3714,6 +3883,12 @@ $inventory = @(
             string silentArgs = GetStr(app, "silentArgs");
 
             bool installedOk = false;
+            if (_sessionAccount != null && GetBool(app, "perUser"))
+            {
+                AppendLog(name + " se instala solo para la cuenta que lo ejecuta, y Blackwall se abrió con otra cuenta: no se instaló. Instálalo desde tu cuenta.", "warn", "Instalación");
+                SetStatus("▲ " + name + " no se instaló: se instalaría en otra cuenta", "Consulta Actividad");
+                return false;
+            }
             var activity = BeginOperation("Instalar · " + name, "Instalación", 3);
 
             // Paso 1: Intentar con WinGet directo si no está forzado el modo HTTPS directo
@@ -3722,7 +3897,7 @@ $inventory = @(
                 string wingetPath = ResolveWingetExecutablePath();
                 if (!string.IsNullOrEmpty(wingetPath))
                 {
-                    SetStatus("📦 Instalando " + name + " mediante WinGet nativo...", wgId);
+                    SetStatus("Instalando " + name + " mediante WinGet nativo...", wgId);
                     StepOperation(activity, "WinGet · instalando " + wgId);
 
                     int exitCode = await Task.Run(() =>
@@ -3734,19 +3909,19 @@ $inventory = @(
                     });
 
                     // ExitCode 0 = instalado; -1978335189 (0x8A15002B) = ya instalado en última versión
-                    if (exitCode == 0 || exitCode == -1978335189)
+                    if (IsWingetSuccessCode(exitCode))
                     {
                         installedOk = true;
                         StepOperation(activity, "WinGet terminó correctamente", true, false);
                     }
                     else
                     {
-                        AppendLog("WinGet devolvió el código " + exitCode + "; se usa la descarga directa del fabricante.", "FALLBACK");
+                        AppendLog("WinGet devolvió el código " + exitCode + (string.IsNullOrEmpty(fbUrl) ? "." : "; se usa la descarga directa del fabricante."), "FALLBACK");
                     }
                 }
                 else
                 {
-                    AppendLog("WinGet no está disponible; se usa la descarga directa del fabricante.", "FALLBACK");
+                    AppendLog("WinGet no está disponible" + (string.IsNullOrEmpty(fbUrl) ? "." : "; se usa la descarga directa del fabricante."), "FALLBACK");
                 }
             }
 
@@ -3760,47 +3935,50 @@ $inventory = @(
                     string targetFile = Path.Combine(pkgFolder, "Setup_" + id + ext);
                     if (File.Exists(targetFile)) File.Delete(targetFile);
 
-                    SetStatus("⬇️ Descargando instalador oficial de " + name + " (HTTPS directo)...", "0%");
+                    SetStatus("Descargando instalador oficial de " + name + " (HTTPS directo)...", "0%");
                     StepOperation(activity, "Descargando desde " + new Uri(fbUrl).Host);
 
-                    using (WebClient wc = new WebClient())
+                    // The same transport as updates: HTTPS only (also after redirects), a size cap and a time limit.
+                    int lastPercent = -1;
+                    await OtaDownload.Fetch(fbUrl, targetFile, InstallerMaxBytes, 0, (bytes, total) =>
                     {
-                        wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Blackwall/1.2");
-                        int lastPercent = -1; // the event fires per received chunk: update the UI only when the percentage moves
-                        wc.DownloadProgressChanged += (s, ev) =>
+                        int percent = total > 0 ? (int)(bytes * 100 / total) : -1;
+                        if (percent == lastPercent) return;
+                        lastPercent = percent;
+                        string mb = Math.Round(bytes / (1024.0 * 1024.0), 1) + " MB";
+                        SetStatus("Descargando " + name + (percent >= 0 ? ": " + percent + " %" : "") + " (" + mb + ")", percent >= 0 ? percent + "%" : mb);
+                        StepOperation(activity, "Descargando " + (percent >= 0 ? percent + " % " : "") + "(" + mb + ")", false, false);
+                    }, System.Threading.CancellationToken.None, 15 * 60 * 1000);
+
+                    int installerCode;
+                    // Held open (others may read, nobody may change or replace it) from the signature check until the
+                    // installer has finished: what runs as administrator is exactly the file that was checked.
+                    using (var held = new FileStream(targetFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        // A download is only run as administrator when Windows trusts its publisher signature.
+                        StepOperation(activity, "Comprobando la firma digital del instalador");
+                        if (!await Task.Run(() => Authenticode.IsTrusted(targetFile)))
+                            throw new InvalidDataException("el instalador descargado no tiene una firma digital válida y no se ejecutó");
+                        // Any valid signature is not enough: it must be the publisher the catalog names for this app.
+                        string signer = await Task.Run(() => Authenticode.SignerName(targetFile));
+                        if (!SignerMatches(app, signer))
+                            throw new InvalidDataException("el instalador está firmado por «" + (signer ?? "nadie") + "», no por «" + GetStr(app, "signer") + "»; no se ejecutó");
+
+                        SetStatus("Ejecutando el instalador de " + name + " en modo silencioso", silentArgs);
+                        StepOperation(activity, "Ejecutando el instalador oficial en modo silencioso");
+
+                        installerCode = await Task.Run(() =>
                         {
-                            if (ev.ProgressPercentage == lastPercent) return;
-                            lastPercent = ev.ProgressPercentage;
-                            double mbRecv = Math.Round(ev.BytesReceived / (1024.0 * 1024.0), 1);
-                            SetStatus("⬇️ Descargando " + name + ": " + ev.ProgressPercentage + "% (" + mbRecv + " MB)", ev.ProgressPercentage + "%");
-                            StepOperation(activity, "Descargando " + ev.ProgressPercentage + " % (" + mbRecv + " MB)", false, false);
-                        };
-                        await wc.DownloadFileTaskAsync(new Uri(fbUrl), targetFile);
+                            bool msi = ext.Equals(".msi", StringComparison.OrdinalIgnoreCase);
+                            // ShellExecute so an installer that needs elevation can still ask for it.
+                            using (Process p = Process.Start(new ProcessStartInfo(msi ? SystemToolPath("msiexec.exe") : targetFile, msi ? "/i \"" + targetFile + "\" " + silentArgs : silentArgs) { UseShellExecute = true }))
+                            {
+                                if (!p.WaitForExit(600000)) { try { p.Kill(); } catch (InvalidOperationException) { } throw new TimeoutException("el instalador no terminó en 10 minutos y se detuvo"); }
+                                return p.ExitCode;
+                            }
+                        });
                     }
-
-                    // A download is only run as administrator when Windows trusts its publisher signature.
-                    StepOperation(activity, "Comprobando la firma digital del instalador");
-                    if (!await Task.Run(() => Authenticode.IsTrusted(targetFile)))
-                    {
-                        try { File.Delete(targetFile); } catch (IOException) { }
-                        throw new InvalidDataException("el instalador descargado no tiene una firma digital válida y no se ejecutó");
-                    }
-
-                    SetStatus("⚙️ Ejecutando instalador silencioso de " + name + "...", silentArgs);
-                    StepOperation(activity, "Ejecutando el instalador oficial en modo silencioso");
-
-                    int installerCode = await Task.Run(() =>
-                    {
-                        bool msi = ext.Equals(".msi", StringComparison.OrdinalIgnoreCase);
-                        // ShellExecute so an installer that needs elevation can still ask for it.
-                        using (Process p = Process.Start(new ProcessStartInfo(msi ? SystemToolPath("msiexec.exe") : targetFile, msi ? "/i \"" + targetFile + "\" " + silentArgs : silentArgs) { UseShellExecute = true }))
-                        {
-                            if (!p.WaitForExit(600000)) { try { p.Kill(); } catch (InvalidOperationException) { } throw new TimeoutException("el instalador no terminó en 10 minutos y se detuvo"); }
-                            int code = p.ExitCode;
-                            try { File.Delete(targetFile); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-                            return code;
-                        }
-                    });
+                    try { File.Delete(targetFile); } catch (IOException) { } catch (UnauthorizedAccessException) { }
                     // 3010 / 1641: installed, restart required or started.
                     if (installerCode != 0 && installerCode != 3010 && installerCode != 1641) throw new InvalidOperationException("el instalador terminó con el código " + installerCode);
                     if (installerCode != 0) AppendLog(name + " necesita reiniciar Windows para terminar la instalación.", "warn", "Instalación");
@@ -3809,28 +3987,47 @@ $inventory = @(
                 catch (Exception ex)
                 {
                     AppendLog("Error en descarga/instalación de " + name + ": " + ex.Message, "error", "Instalación");
-                    SetStatus("🔴 Error al instalar " + name, "Error");
+                    SetStatus("✕ Error al instalar " + name, "Error");
                 }
             }
 
+            if (!installedOk && string.IsNullOrEmpty(fbUrl))
+            {
+                AppendLog(name + " solo se instala con WinGet: su fabricante no firma el instalador, así que Blackwall no lo descarga por su cuenta.", "warn", "Instalación");
+                SetStatus("✕ No se pudo instalar " + name + " (solo disponible por WinGet)", "Consulta Actividad");
+            }
             CompleteOperation(activity, installedOk, name + (installedOk ? ": instalado" : ": no se pudo instalar"));
-            await RefreshInstalledAppsNativeAsync();
+            if (refreshAfter) await RefreshInstalledAppsNativeAsync();
             if (installedOk)
             {
-                SetStatus("🟢 " + name + " instalado correctamente", "Listo");
+                SetStatus("● " + name + " instalado correctamente", "Listo");
             }
+            return installedOk;
         }
 
         private async Task InstallSelectedAppsBatchAsync()
         {
             var chosen = _apps.Where(a => _selectedApps.Contains(GetStr(a, "id"))).ToList();
+            if (chosen.Count == 0)
+            {
+                SetStatus("Selecciona al menos una aplicación primero", "Software");
+                return;
+            }
             var activity = BeginOperation("Instalar " + chosen.Count + " aplicaciones", "Instalación", chosen.Count);
+            int okCount = 0;
+            int failCount = 0;
             for (int i = 0; i < chosen.Count; i++)
             {
                 StepOperation(activity, GetStr(chosen[i], "name"), true, false);
-                await InstallSingleAppAsync(chosen[i]);
+                if (await InstallSingleAppCoreAsync(chosen[i], false)) okCount++;
+                else failCount++;
             }
-            CompleteOperation(activity, true, "Instalación de " + chosen.Count + " aplicaciones terminada");
+            await RefreshInstalledAppsNativeAsync();
+            string summary = failCount == 0
+                ? "Se instalaron " + okCount + " aplicaciones"
+                : okCount + " instaladas · " + failCount + " con error";
+            CompleteOperation(activity, failCount == 0, summary);
+            SetStatus((failCount == 0 ? "● " : "▲ ") + summary, failCount == 0 ? "Listo" : "Consulta Actividad");
         }
 
         private async Task UpgradeAllAppsAsync()
@@ -3839,20 +4036,28 @@ $inventory = @(
             if (string.IsNullOrEmpty(wingetPath))
             {
                 AppendLog("WinGet no está presente en este equipo. Selecciona las aplicaciones de la lista para instalarlas por Descarga HTTPS Directa.", "WARN");
+                SetStatus("▲ WinGet no está disponible en este equipo", "Consulta Actividad");
                 return;
             }
-            SetStatus("🔄 Actualizando todas las apps del PC (winget upgrade --all --silent)...", "WinGet Nativo");
+            SetStatus("Actualizando todas las apps del PC (winget upgrade --all --silent)...", "WinGet Nativo");
+            bool upToDate = false;
             bool updated = await RunOperationAsync("Actualizar todas las aplicaciones", "Instalación", op => Task.Run(() =>
             {
                 StepOperation(op, "WinGet · upgrade --all");
                 int code;
                 string res = RunSystemToolDirect(wingetPath, "upgrade --all --include-unknown --silent --accept-package-agreements --accept-source-agreements --disable-interactivity", out code, 1800000);
                 if (!string.IsNullOrWhiteSpace(res)) AppendLog(LastMeaningfulLines(res, 5), "WINGET");
-                if (code != 0) throw new InvalidOperationException("WinGet devolvió el código " + code);
+                if (!IsWingetSuccessCode(code)) throw new InvalidOperationException("WinGet devolvió el código " + code);
+                if (code == -1978335189)
+                {
+                    upToDate = true;
+                    AppendLog("Todas las aplicaciones ya están en la última versión.", "WINGET");
+                    return "Todas las aplicaciones ya están al día";
+                }
                 return "Aplicaciones actualizadas";
             }));
             await RefreshInstalledAppsNativeAsync();
-            if (updated) SetStatus("🟢 Todas las aplicaciones actualizadas", "Listo");
+            if (updated) SetStatus(upToDate ? "● Todas las aplicaciones ya están al día" : "● Todas las aplicaciones actualizadas", "Listo");
         }
 
         // ====================================================================
@@ -4027,12 +4232,12 @@ $inventory = @(
 
         private async Task CreateRestorePointNowCoreAsync()
         {
-            SetStatus("🛡️ Creando punto de restauración…", "Puede tardar hasta un minuto");
+            SetStatus("Creando punto de restauración…", "Puede tardar hasta un minuto");
             var activity = BeginOperation("Crear punto de restauración", "Seguridad", 0);
             string error = await CreateVerifiedRestorePointAsync();
             CompleteOperation(activity, error == null, error ?? "Punto de restauración " + RestorePointSummary() + " verificado");
-            if (error == null) SetStatus("🟢 Punto de restauración verificado", RestorePointSummary());
-            else { AppendLog(error, "WARN"); SetStatus("🟡 " + error, "Aviso"); }
+            if (error == null) SetStatus("● Punto de restauración verificado", RestorePointSummary());
+            else { AppendLog(error, "WARN"); SetStatus("▲ " + error, "Aviso"); }
             await RefreshRestorePointsNativeAsync();
         }
 
@@ -4170,7 +4375,7 @@ $inventory = @(
             _restorePointDialogOpen = true;
             try { ShowAppDialog(dialog); }
             finally { _restorePointDialogOpen = false; }
-            if (ready) { SetStatus("🟢 Punto de restauración verificado", RestorePointSummary()); var refresh = RefreshRestorePointsNativeAsync(); }
+            if (ready) { SetStatus("● Punto de restauración verificado", RestorePointSummary()); var refresh = RefreshRestorePointsNativeAsync(); }
             return ready;
         }
 
@@ -4301,7 +4506,7 @@ $inventory = @(
             }
             string summary = reverted + " de " + ordered.Count + " cambios revertidos" + (failed.Count > 0 ? " · no se pudo revertir: " + string.Join(", ", failed) + (held > 0 ? " · " + held + " en espera para no perder sus valores originales" : "") + "; revisa Actividad" : "");
             CompleteOperation(activity, failed.Count == 0, summary);
-            SetStatus((failed.Count == 0 ? "🟢 " : "🟡 ") + summary, failed.Count == 0 ? "Listo" : "Consulta la consola");
+            SetStatus((failed.Count == 0 ? "● " : "▲ ") + summary, failed.Count == 0 ? "Listo" : "Consulta la consola");
             await RefreshTweaksStateNativeAsync();
             RenderCurrentTab();
         }
@@ -4491,7 +4696,7 @@ $inventory = @(
                     catch (Exception ex) { failed.Add(GetStr(t, "shortTitle")); AppendLog(GetStr(t, "shortTitle") + ": " + ex.Message, "ERROR"); }
                 }
                 await RefreshTweaksStateNativeAsync();
-                SetStatus(failed.Count == 0 ? "🟢 Revertidos " + leftovers.Count + " ajustes que no correspondían a este equipo" : "🟡 No se pudieron revertir: " + string.Join(", ", failed), failed.Count == 0 ? "Reinicia para completar" : "Consulta la consola");
+                SetStatus(failed.Count == 0 ? "● Revertidos " + leftovers.Count + " ajustes que no correspondían a este equipo" : "▲ No se pudieron revertir: " + string.Join(", ", failed), failed.Count == 0 ? "Reinicia para completar" : "Consulta la consola");
             }
             finally { EndSystemChange(); }
         }
@@ -4509,7 +4714,7 @@ $inventory = @(
                 // The power repair and startup choices are not optimizations: resetting keeps them (Revertir todo undoes them).
                 Func<Dictionary<string, object>, bool> blackwallChange = IsOptimizationChange;
                 int journaled = _changes.Count(blackwallChange);
-                if (journaled == 0 && detected.Count == 0) { SetStatus("🟢 No hay ajustes de Blackwall aplicados en este equipo", "Nada que restablecer"); return; }
+                if (journaled == 0 && detected.Count == 0) { SetStatus("● No hay ajustes de Blackwall aplicados en este equipo", "Nada que restablecer"); return; }
                 if (!_confirmFullReset(detected, journaled)) return;
                 var activity = BeginOperation("Restablecer todo lo de Blackwall", "Optimización", 2);
                 StepOperation(activity, "Valores guardados por Blackwall (" + journaled + ")");
@@ -4551,7 +4756,7 @@ $inventory = @(
                 if (powerError != null) notDone.Add(new KeyValuePair<string, string>("Reparar plan de energía", powerError));
                 string summary = notDone.Count == 0 ? "Todo lo de Blackwall está restablecido. Reinicia Windows para completarlo." : done.Count + " restablecidos · " + notDone.Count + " no se pudieron restablecer: " + string.Join(", ", notDone.Select(p => p.Key));
                 CompleteOperation(activity, notDone.Count == 0, summary);
-                SetStatus((notDone.Count == 0 ? "🟢 " : "🟡 ") + summary, notDone.Count == 0 ? "Reinicia para completar" : "Consulta Actividad");
+                SetStatus((notDone.Count == 0 ? "● " : "▲ ") + summary, notDone.Count == 0 ? "Reinicia para completar" : "Consulta Actividad");
                 RenderCurrentTab();
                 _reportFullReset(done, notDone);
             }
@@ -4601,7 +4806,8 @@ $inventory = @(
             }
             body.Children.Add(new ScrollViewer { Content = list, MaxHeight = Math.Max(200, SystemParameters.WorkArea.Height - 380), VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             body.Children.Add(DialogText("Reinicia Windows para completarlo. Cada operación y su comprobación están en " + ChangeLogPath + ".", TextSecondary, 12));
-            AddDialogButton(actions, "Abrir registro", false).Click += (s, e) => { try { Process.Start(new ProcessStartInfo(ChangeLogPath) { UseShellExecute = true }); } catch (Exception ex) { AppendLog("No se pudo abrir el registro: " + ex.Message, "warn", "Seguridad"); } };
+            // Notepad from System32, not whatever the profile associates with .log: this window runs as administrator.
+            AddDialogButton(actions, "Abrir registro", false).Click += (s, e) => { try { Process.Start(new ProcessStartInfo(SystemToolPath("notepad.exe"), "\"" + ChangeLogPath + "\"") { UseShellExecute = false }); } catch (Exception ex) { AppendLog("No se pudo abrir el registro: " + ex.Message, "warn", "Seguridad"); } };
             AddDialogButton(actions, "Cerrar", true).Click += (s, e) => dialog.Close();
             ShowAppDialog(dialog);
         }
@@ -4863,7 +5069,6 @@ $inventory = @(
                 TextSecondary = BrushHex(_isDark ? "#A7B0BF" : "#465464");
                 AccentBrush = BrushHex(_isDark ? "#8F1828" : "#8F1828");
                 CyberCyanBrush = BrushHex(_isDark ? "#FF8B80" : "#873A36");
-                CyberYellowBrush = BrushHex(_isDark ? "#FF8B80" : "#873A36");
                 RiskLowBg = BrushHex(_isDark ? "#0B1E19" : "#CCDCD2");
                 RiskLowText = BrushHex(_isDark ? "#8BD8B5" : "#235C3C");
                 RiskMedBg = BrushHex(_isDark ? "#2A2207" : "#DCD2BC");
@@ -4883,7 +5088,6 @@ $inventory = @(
                 TextSecondary.Color = ColorHex(_isDark ? "#A7B0BF" : "#465464");
                 AccentBrush.Color = ColorHex(_isDark ? "#8F1828" : "#8F1828");
                 CyberCyanBrush.Color = ColorHex(_isDark ? "#FF8B80" : "#873A36");
-                CyberYellowBrush.Color = ColorHex(_isDark ? "#FF8B80" : "#873A36");
                 RiskLowBg.Color = ColorHex(_isDark ? "#0B1E19" : "#CCDCD2");
                 RiskLowText.Color = ColorHex(_isDark ? "#8BD8B5" : "#235C3C");
                 RiskMedBg.Color = ColorHex(_isDark ? "#2A2207" : "#DCD2BC");
@@ -5155,12 +5359,12 @@ $inventory = @(
             };
 
             Grid topGrid = new Grid();
-            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(172) });
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Col 0: Logo Cyberpunk Blackwall ICE + Marca
-            StackPanel brandStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            StackPanel brandStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, MinWidth = 210, MaxWidth = 310 };
             WindowChrome.SetIsHitTestVisibleInChrome(brandStack, true);
 
             _logoBox = new Border
@@ -5211,14 +5415,18 @@ $inventory = @(
             });
             titleStack.Children.Add(brandLine);
 
+            string initialBadge = _hardware != null && _hardware.ContainsKey("chassis")
+                ? FormatChassisHeader(_hardware["chassis"] as Dictionary<string, object>)
+                : "SYSTEM INTERFACE // Inicializando";
             _deviceBadgeText = new TextBlock
             {
-                Text = _hardware != null && _hardware.ContainsKey("chassis")
-                    ? FormatChassisHeader(_hardware["chassis"] as Dictionary<string, object>)
-                    : "SYSTEM INTERFACE // Inicializando",
+                Text = initialBadge,
+                ToolTip = initialBadge,
                 Foreground = CyberCyanBrush,
                 FontSize = 11,
-                FontWeight = FontWeights.SemiBold
+                FontWeight = FontWeights.SemiBold,
+                MaxWidth = 250,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
             titleStack.Children.Add(_deviceBadgeText);
             brandStack.Children.Add(titleStack);
@@ -5385,9 +5593,6 @@ $inventory = @(
             topBar.Child = topGrid;
             Grid.SetRow(topBar, 0);
             _rootGrid.Children.Add(topBar);
-            _headerEnergy = new EnergyTrace { Height = 12, VerticalAlignment = VerticalAlignment.Bottom };
-            _headerEnergy.Visibility = Visibility.Collapsed;
-            _rootGrid.Children.Add(_headerEnergy);
 
             // 2. CUERPO CENTRAL
             Grid bodyGrid = new Grid();
@@ -5484,9 +5689,6 @@ $inventory = @(
             sidebarBorder.HorizontalAlignment = HorizontalAlignment.Left;
             Panel.SetZIndex(sidebarBorder, 20);
             bodyGrid.Children.Add(sidebarBorder);
-            _sidebarEnergy = new EnergyTrace { Width = 8, Vertical = true, HorizontalAlignment = HorizontalAlignment.Left };
-            _sidebarEnergy.Visibility = Visibility.Collapsed;
-            bodyGrid.Children.Add(_sidebarEnergy);
 
             _mainScroll = CreateSmoothScroller();
             _mainScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
@@ -5677,7 +5879,7 @@ $inventory = @(
                 {
                     if (h.Title.ToLowerInvariant().Contains(q) || h.Sub.ToLowerInvariant().Contains(q) || h.Key.Contains(q))
                     {
-                        AddOmniboxResultItem("💻 " + h.Title, h.Sub, "Hardware", () => SwitchTab("hardware"));
+                        AddOmniboxResultItem(h.Title, h.Sub, "Hardware", () => SwitchTab("hardware"));
                         if (++count >= 9) break;
                     }
                 }
@@ -5686,15 +5888,18 @@ $inventory = @(
             foreach (var t in _tweaks.Where(TweakAvailable))
             {
                 if (count >= 10) break;
-                string title = GetStr(t, "title");
-                string desc = GetStr(t, "description");
+                string title = GetStr(t, "shortTitle");
+                if (string.IsNullOrEmpty(title)) title = GetStr(t, "title");
+                string desc = GetStr(t, "summary");
+                if (string.IsNullOrEmpty(desc)) desc = GetStr(t, "description");
                 string sub = GetStr(t, "subcategory");
-                if (title.ToLowerInvariant().Contains(q) || desc.ToLowerInvariant().Contains(q) || sub.ToLowerInvariant().Contains(q))
+                if (TweakMatchesQuery(t, q))
                 {
                     string cat = IsFrozen(t) ? "ceito" : "winutil";
-                    string risk = GetStr(t, "riskLevel").ToUpperInvariant();
+                    string risk = GetStr(t, "riskLevel").ToLowerInvariant();
+                    string riskBadge = risk == "high" ? "Riesgo alto" : risk == "medium" ? "Riesgo medio" : "Riesgo bajo";
                     string tweakId = GetStr(t, "id");
-                    AddOmniboxResultItem(title, sub + " — " + desc, "Riesgo " + risk, () => OpenSearchTarget(cat, tweakId));
+                    AddOmniboxResultItem(title, sub + " — " + desc, riskBadge, () => OpenSearchTarget(cat, tweakId));
                     count++;
                 }
             }
@@ -5728,6 +5933,17 @@ $inventory = @(
 
             _omniboxPopup.IsOpen = true;
             SelectOmniboxResult(_omniboxItems.Count > 0 ? 0 : -1);
+        }
+
+        // Title, short title, summary, description, subcategory and the catalog's tags ("candy crush", "bloatware").
+        internal static bool TweakMatchesQuery(Dictionary<string, object> t, string query)
+        {
+            string q = (query ?? "").Trim().ToLowerInvariant();
+            if (q.Length == 0) return false;
+            var fields = new[] { "title", "shortTitle", "summary", "description", "subcategory" }.Select(k => t.ContainsKey(k) ? Convert.ToString(t[k]) : "");
+            object tags;
+            if (t.TryGetValue("tags", out tags) && tags is IEnumerable && !(tags is string)) fields = fields.Concat(((IEnumerable)tags).Cast<object>().Select(Convert.ToString));
+            return fields.Any(f => !string.IsNullOrEmpty(f) && f.ToLowerInvariant().Contains(q));
         }
 
         private void OnOmniboxKeyDown(object sender, KeyEventArgs e)
@@ -5966,7 +6182,9 @@ $inventory = @(
                 { "Módulo TPM", GetStr(mb, "tpmVersion") }
             }));
 
-            row1.Children.Add(CreateKvCard("🧠 3. Procesador (CPU)", "Uso: " + GetStr(cpu, "loadPercent") + "%", new[,]
+            int cpuLoad = cpu.ContainsKey("loadPercent") ? GetInt(cpu, "loadPercent") : -1;
+            string cpuLoadBadge = cpuLoad >= 0 ? "Uso: " + cpuLoad + "%" : "Uso: N/D";
+            row1.Children.Add(CreateKvCard("3. Procesador (CPU)", cpuLoadBadge, new[,]
             {
                 { "Nombre Exacto", GetStr(cpu, "name") },
                 { "Arquitectura / Socket", GetStr(cpu, "architecture") + " • " + GetStr(cpu, "socket") },
@@ -5987,7 +6205,7 @@ $inventory = @(
             ramHeader.Children.Add(chanBadge);
             ramHeader.Children.Add(new TextBlock
             {
-                Text = "⚡ 4. Memoria RAM — Detalle General y por Slot Físico (" + GetStr(mem, "occupiedSlots") + " de " + GetStr(mem, "totalSlots") + " Slots Ocupados — Total: " + GetStr(mem, "totalGb") + " GB " + GetStr(mem, "memoryType") + " @ " + GetStr(mem, "speedMhz") + " MHz)",
+                Text = "4. Memoria RAM — Detalle General y por Slot Físico (" + GetStr(mem, "occupiedSlots") + " de " + GetStr(mem, "totalSlots") + " Slots Ocupados — Total: " + GetStr(mem, "totalGb") + " GB " + GetStr(mem, "memoryType") + " @ " + GetStr(mem, "speedMhz") + " MHz)",
                 Foreground = TextPrimary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14.5,
@@ -6000,7 +6218,9 @@ $inventory = @(
             foreach (var s in slots)
             {
                 bool occ = GetBool(s, "occupied");
-                string title = "📍 " + GetStr(s, "slotName") + " (" + GetStr(s, "bankLabel") + ")";
+                int mv = GetInt(s, "voltageMv");
+                string mvText = occ ? (mv > 0 ? mv + " mV" : "Sin informar") : "—";
+                string title = GetStr(s, "slotName") + " (" + GetStr(s, "bankLabel") + ")";
                 string badge = occ ? (GetStr(s, "capacityGb") + " GB " + GetStr(s, "memType") + " @ " + GetStr(s, "speedMhz") + " MHz") : "SLOT VACÍO";
                 slotsGrid.Children.Add(CreateKvCard(title, badge, new[,]
                 {
@@ -6008,7 +6228,7 @@ $inventory = @(
                     { "Marca / Fabricante", GetStr(s, "manufacturer") },
                     { "Número de Parte (Part #)", GetStr(s, "partNumber") },
                     { "Serial Individual Stick", GetStr(s, "serialNumber") },
-                    { "Voltaje Configurado", GetStr(s, "voltageMv") + " mV" }
+                    { "Voltaje Configurado", mvText }
                 }));
             }
             ramStack.Children.Add(slotsGrid);
@@ -6248,7 +6468,7 @@ $inventory = @(
             }
             CompleteOperation(activity, failed.Count == 0, label + ": " + (batch.Count - failed.Count) + " de " + batch.Count + " aplicadas" + (failed.Count > 0 ? " · fallaron " + string.Join(", ", failed) : ""));
             if (failed.Count > 0) SetStatus(label + ": " + failed.Count + " no se aplicaron (" + string.Join(", ", failed) + ")", "Consulta la consola");
-            else SetStatus("🟢 " + label + ": " + batch.Count + " aplicadas", "Completado");
+            else SetStatus("● " + label + ": " + batch.Count + " aplicadas", "Completado");
         }
 
         private bool _tweakDevicePickerOpen;
@@ -6414,6 +6634,9 @@ $inventory = @(
             var section = _tweaks.Where(t => GetStr(t, "section") == "winutil").ToList();
             StackPanel headStack;
             root.Children.Add(BuildTweaksHeader("WinUtil", section, true, out headStack));
+            if (_sessionAccount != null)
+                headStack.Children.Add(new Border { BorderBrush = RiskHighText, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(12, 10, 12, 10), Margin = new Thickness(0, 12, 0, 0),
+                    Child = new TextBlock { Text = "Blackwall se abrió con la cuenta " + WindowsIdentity.GetCurrent().Name + ", pero la sesión es de " + _sessionAccount + ". Los ajustes de usuario y las preferencias se aplicarían a esa otra cuenta, así que están bloqueados; los ajustes de todo el equipo sí funcionan. Para cambiar los tuyos, haz administrador a tu cuenta y abre Blackwall desde ella.", Foreground = TextPrimary, FontSize = 12.5, TextWrapping = TextWrapping.Wrap } });
             headStack.Children.Add(new TextBlock { Text = "Perfiles de WinUtil: elige uno, mira qué tarjetas se marcan y aplícalo", Foreground = TextSecondary, FontSize = 12, Margin = new Thickness(0, 14, 0, 8) });
             var profiles = new WrapPanel();
             foreach (string profileName in WinUtilProfiles.Keys)
@@ -6626,12 +6849,12 @@ $inventory = @(
                 if (_confirmRestart() && _runShutdown("/r /t 20 /c \"Blackwall reinicia el equipo para aplicar las preferencias. Guarda tu trabajo.\""))
                 {
                     _restartScheduled = true;
-                    SetStatus("🔄 Preferencias comprobadas: el equipo se reinicia en 20 segundos", "Guarda tu trabajo");
+                    SetStatus("● Preferencias comprobadas: el equipo se reinicia en 20 segundos", "Guarda tu trabajo");
                 }
-                else SetStatus("🟢 Preferencias aplicadas y comprobadas", "Se verán al reiniciar el equipo");
+                else SetStatus("● Preferencias aplicadas y comprobadas", "Se verán al reiniciar el equipo");
             }
-            else if (problems.Count > 0) SetStatus("🔴 " + problems.Count + " preferencias no se aplicaron; no se reinicia", string.Join("; ", problems));
-            else SetStatus("🟢 Preferencias aplicadas y comprobadas", "Listo");
+            else if (problems.Count > 0) SetStatus("✕ " + problems.Count + " preferencias no se aplicaron; no se reinicia", string.Join("; ", problems));
+            else SetStatus("● Preferencias aplicadas y comprobadas", "Listo");
             RenderCurrentTab();
         }
 
@@ -6652,7 +6875,7 @@ $inventory = @(
         private void CancelRestart()
         {
             _restartScheduled = !_runShutdown("/a") && _restartScheduled;
-            SetStatus(_restartScheduled ? "🔴 No se pudo cancelar el reinicio" : "🟢 Reinicio cancelado", "Las preferencias se verán al reiniciar el equipo");
+            SetStatus(_restartScheduled ? "✕ No se pudo cancelar el reinicio" : "● Reinicio cancelado", "Las preferencias se verán al reiniciar el equipo");
             RenderCurrentTab();
         }
 
@@ -6662,7 +6885,7 @@ $inventory = @(
         {
             await Task.Run(() => { int code; RunSystemToolDirect("taskkill.exe", "/f /im explorer.exe", out code, 15000); });
             for (int i = 0; i < 20 && Process.GetProcessesByName("explorer").Length == 0; i++) await Task.Delay(250);
-            if (Process.GetProcessesByName("explorer").Length == 0) SetStatus("🟡 El Explorador no volvió solo: cierra sesión y vuelve a entrar", "Preferencias");
+            if (Process.GetProcessesByName("explorer").Length == 0) SetStatus("▲ El Explorador no volvió solo: cierra sesión y vuelve a entrar", "Preferencias");
         }
 
         // ── Ceito: en pausa, solo para revertir; al entrar siempre pasa por un asistente.
@@ -7115,12 +7338,13 @@ $inventory = @(
 
             // 4. PIE DE TARJETA: Estado actual + botón Undo si activo
             DockPanel footer = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            bool isPartial = isApplied && _tweakPartial.Contains(id);
 
             TextBlock statusText = new TextBlock
             {
-                Text = !stateKnown ? "Pendiente de verificar" : isApplied ? "Detectado como activo" : "No detectado como activo",
+                Text = !stateKnown ? "Pendiente de verificar" : isPartial ? "Aplicado en parte" : isApplied ? "Detectado como activo" : "No detectado como activo",
                 ToolTip = "La detección usa los criterios del catálogo; no demuestra que todas las operaciones se hayan aplicado ni que se conserve tu configuración original.",
-                Foreground = isApplied ? RiskLowText : TextSecondary,
+                Foreground = isPartial ? RiskMedText : isApplied ? RiskLowText : TextSecondary,
                 FontWeight = isApplied ? FontWeights.Bold : FontWeights.Normal,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
@@ -7146,7 +7370,7 @@ $inventory = @(
             // Actualizador en caliente registrado para esta tarjeta (Cero saltos de scroll)
             Action<bool> updateCardUi = (bool applied) =>
             {
-
+                bool nowPartial = applied && _tweakPartial.Contains(id);
                 switchButton.Content = applied ? "Revertir" : frozen ? "En pausa" : "Aplicar";
                 switchButton.IsEnabled = applied || !frozen;
                 paintState(applied);
@@ -7154,8 +7378,8 @@ $inventory = @(
                 switchButton.Foreground = applied ? TextPrimary : BrushHex("#182232");
                 System.Windows.Automation.AutomationProperties.SetName(switchButton, (applied ? "Revertir " : "Aplicar ") + shortTitle);
                 AnimateEntrance(statusText, 2, 180);
-                statusText.Text = applied ? "Detectado como activo" : "No detectado como activo";
-                statusText.Foreground = applied ? RiskLowText : TextSecondary;
+                statusText.Text = nowPartial ? "Aplicado en parte" : applied ? "Detectado como activo" : "No detectado como activo";
+                statusText.Foreground = nowPartial ? RiskMedText : applied ? RiskLowText : TextSecondary;
                 statusText.FontWeight = applied ? FontWeights.Bold : FontWeights.Normal;
             };
             _tweakCardUpdaters[id] = updateCardUi;
@@ -7269,7 +7493,8 @@ $inventory = @(
 
         private static Dictionary<string, ImageSource> _iconCache = new Dictionary<string, ImageSource>();
 
-        private ImageSource GetAppIconSource(Dictionary<string, object> a, Action<ImageSource> onDownloaded = null)
+        // Only the icons embedded in the executable: nothing is read from writable folders or downloaded.
+        private ImageSource GetAppIconSource(Dictionary<string, object> a)
         {
             string id = GetStr(a, "id");
             if (string.IsNullOrEmpty(id)) return null;
@@ -7307,85 +7532,6 @@ $inventory = @(
                 }
             }
             catch { }
-
-            // 2. Carpeta local assets\icons en el directorio de la aplicación
-            try
-            {
-                string localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"assets\icons\" + iconName);
-                if (!File.Exists(localPath))
-                    localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"assets\icons\" + id + ".png");
-
-                if (File.Exists(localPath))
-                {
-                    var bi = new BitmapImage();
-                    bi.BeginInit();
-                    bi.CacheOption = BitmapCacheOption.OnLoad;
-                    bi.UriSource = new Uri(localPath, UriKind.Absolute);
-                    bi.EndInit();
-                    bi.Freeze();
-                    _iconCache[id] = bi;
-                    return bi;
-                }
-            }
-            catch { }
-
-            // 3. Caché local persistente en %LocalAppData%\Blackwall\icons
-            string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Blackwall\icons");
-            string cachePath = Path.Combine(cacheDir, iconName);
-            if (File.Exists(cachePath))
-            {
-                try
-                {
-                    var bi = new BitmapImage();
-                    bi.BeginInit();
-                    bi.CacheOption = BitmapCacheOption.OnLoad;
-                    bi.UriSource = new Uri(cachePath, UriKind.Absolute);
-                    bi.EndInit();
-                    bi.Freeze();
-                    _iconCache[id] = bi;
-                    return bi;
-                }
-                catch { }
-            }
-
-            // 4. Descarga asíncrona segura desde iconUrl oficial con almacenamiento en caché
-            string iconUrl = GetStr(a, "iconUrl");
-            if (!string.IsNullOrEmpty(iconUrl))
-            {
-                Task.Run(() =>
-                {
-                    try
-                    {
-                        if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
-                        using (var wc = new WebClient())
-                        {
-                            wc.Headers.Add("User-Agent", "Blackwall/2.0");
-                            byte[] data = wc.DownloadData(iconUrl);
-                            File.WriteAllBytes(cachePath, data);
-
-                            Dispatcher.Invoke(() =>
-                            {
-                                try
-                                {
-                                    using (var ms = new MemoryStream(data))
-                                    {
-                                        var bi = new BitmapImage();
-                                        bi.BeginInit();
-                                        bi.CacheOption = BitmapCacheOption.OnLoad;
-                                        bi.StreamSource = ms;
-                                        bi.EndInit();
-                                        bi.Freeze();
-                                        _iconCache[id] = bi;
-                                        if (onDownloaded != null) onDownloaded(bi);
-                                    }
-                                }
-                                catch { }
-                            });
-                        }
-                    }
-                    catch { }
-                });
-            }
 
             return null;
         }
@@ -7467,11 +7613,7 @@ $inventory = @(
             iconGrid.Children.Add(img);
             iconContainer.Child = iconGrid;
 
-            ImageSource src = GetAppIconSource(a, downloadedSrc =>
-            {
-                img.Source = downloadedSrc;
-                fallbackInitial.Visibility = Visibility.Collapsed;
-            });
+            ImageSource src = GetAppIconSource(a);
 
             if (src != null)
             {
@@ -7785,7 +7927,7 @@ $inventory = @(
             StackPanel root = new StackPanel();
             root.Children.Add(CreateBanner(
                 "Seguridad y recuperación",
-                "Blackwall utiliza la API WMI nativa root\\default:SystemRestore sin scripts externos."
+                "Puntos de restauración mediante la API nativa de Windows (SRSetRestorePointW) y mantenimiento oficial sin scripts externos."
             ));
 
             AdaptiveCardGrid grid = new AdaptiveCardGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 14) };
@@ -7793,7 +7935,7 @@ $inventory = @(
             Border rpCard = CreateCardContainer();
             rpCard.Margin = new Thickness(0, 0, 12, 0);
             StackPanel rpStack = new StackPanel();
-            rpStack.Children.Add(new TextBlock { Text = "🛡️ Protección Automática y Puntos de Restauración", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
+            rpStack.Children.Add(new TextBlock { Text = "Protección Automática y Puntos de Restauración", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
             rpStack.Children.Add(new TextBlock { Text = "Blackwall no cambia el sistema sin un punto de restauración que Windows siga teniendo; si se borra, pide uno nuevo.", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 10) });
             bool pointGone = _restorePointRecord != null && _restorePointStatus == "deleted";
             rpStack.Children.Add(new TextBlock
@@ -7804,12 +7946,13 @@ $inventory = @(
             });
 
             WrapPanel rpBtns = new WrapPanel();
-            Button createRpBtn = CreateStyledButton("➕ Crear Punto de Restauración Ahora", true);
-            createRpBtn.Margin = new Thickness(0, 0, 8, 0);
+            Button createRpBtn = CreateStyledButton("Crear Punto de Restauración Ahora", true);
+            createRpBtn.Margin = new Thickness(0, 0, 8, 8);
             createRpBtn.Click += async (s, e) => await RunUiActionAsync("restore", createRpBtn, () => CreateRestorePointNowAsync());
             rpBtns.Children.Add(createRpBtn);
 
-            Button rstruiBtn = CreateStyledButton("🕰️ Abrir rstrui.exe", false);
+            Button rstruiBtn = CreateStyledButton("Abrir rstrui.exe", false);
+            rstruiBtn.Margin = new Thickness(0, 0, 8, 8);
             rstruiBtn.Click += (s, e) => { try { Process.Start(SystemToolPath("rstrui.exe")); } catch (System.ComponentModel.Win32Exception ex) { AppendLog("No se pudo abrir Restaurar sistema: " + ex.Message, "WARN"); } };
             rpBtns.Children.Add(rstruiBtn);
             rpStack.Children.Add(rpBtns);
@@ -7818,37 +7961,38 @@ $inventory = @(
 
             Border repairCard = CreateCardContainer();
             StackPanel repStack = new StackPanel();
-            repStack.Children.Add(new TextBlock { Text = "🔧 Reparación de Imagen de Windows (SFC, DISM & Red)", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
+            repStack.Children.Add(new TextBlock { Text = "Reparación de Imagen de Windows (SFC, DISM y Red)", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, TextWrapping = TextWrapping.Wrap });
             repStack.Children.Add(new TextBlock { Text = "Invoca directamente las herramientas nativas de mantenimiento de Microsoft.", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 12) });
 
             WrapPanel repBtns = new WrapPanel();
-            Button sfcBtn = CreateStyledButton("🔍 Ejecutar SFC /verifyonly", false);
+            Button sfcBtn = CreateStyledButton("Ejecutar SFC /verifyonly", false);
             sfcBtn.Margin = new Thickness(0, 0, 8, 8);
-            sfcBtn.Click += async (s, e) =>
+            sfcBtn.Click += async (s, e) => await RunUiActionAsync("safety-sfc", sfcBtn, async () =>
             {
-                SetStatus("🔍 Ejecutando SFC...", "sfc.exe /verifyonly");
+                SetStatus("Ejecutando SFC...", "sfc.exe /verifyonly");
                 if (await RunOperationAsync("Verificar archivos de Windows (SFC)", "Sistema", op => Task.Run(() => { StepOperation(op, "sfc.exe /verifyonly · puede tardar varios minutos"); return "SFC: " + LastMeaningfulLines(RunSystemToolDirect("sfc.exe", "/verifyonly"), 2); })))
-                    SetStatus("🟢 Verificación SFC finalizada", "Listo");
-            };
+                    SetStatus("● Verificación SFC finalizada", "Listo");
+            });
             repBtns.Children.Add(sfcBtn);
 
-            Button dismBtn = CreateStyledButton("🩺 Ejecutar DISM /CheckHealth", false);
+            Button dismBtn = CreateStyledButton("Ejecutar DISM /CheckHealth", false);
             dismBtn.Margin = new Thickness(0, 0, 8, 8);
-            dismBtn.Click += async (s, e) =>
+            dismBtn.Click += async (s, e) => await RunUiActionAsync("safety-dism", dismBtn, async () =>
             {
-                SetStatus("🩺 Ejecutando DISM...", "DISM.exe /CheckHealth");
+                SetStatus("Ejecutando DISM...", "DISM.exe /CheckHealth");
                 if (await RunOperationAsync("Comprobar la imagen de Windows (DISM)", "Sistema", op => Task.Run(() => { StepOperation(op, "DISM /Online /Cleanup-Image /CheckHealth"); return "DISM: " + LastMeaningfulLines(RunSystemToolDirect("DISM.exe", "/Online /Cleanup-Image /CheckHealth"), 2); })))
-                    SetStatus("🟢 Diagnóstico DISM finalizado", "Listo");
-            };
+                    SetStatus("● Diagnóstico DISM finalizado", "Listo");
+            });
             repBtns.Children.Add(dismBtn);
 
-            Button dnsBtn = CreateStyledButton("🌐 Limpiar caché DNS", false);
+            Button dnsBtn = CreateStyledButton("Limpiar caché DNS", false);
             dnsBtn.Margin = new Thickness(0, 0, 8, 8);
-            dnsBtn.Click += async (s, e) =>
+            dnsBtn.Click += async (s, e) => await RunUiActionAsync("safety-dns", dnsBtn, async () =>
             {
+                SetStatus("Limpiando caché DNS...", "ipconfig.exe /flushdns");
                 if (await RunOperationAsync("Limpiar la caché DNS", "Sistema", op => Task.Run(() => { StepOperation(op, "ipconfig /flushdns"); return "DNS: " + LastMeaningfulLines(RunSystemToolDirect("ipconfig.exe", "/flushdns"), 1); })))
-                    SetStatus("🟢 Caché DNS limpiada", "Listo");
-            };
+                    SetStatus("● Caché DNS limpiada", "Listo");
+            });
             repBtns.Children.Add(dnsBtn);
 
             repStack.Children.Add(repBtns);
@@ -7861,7 +8005,7 @@ $inventory = @(
             StackPanel listStack = new StackPanel();
             listStack.Children.Add(new TextBlock
             {
-                Text = "📋 Puntos de Restauración Registrados en C:\\ (" + _restorePoints.Count + ")",
+                Text = "Puntos de Restauración Registrados en C:\\ (" + _restorePoints.Count + ")",
                 Foreground = TextPrimary,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14,
@@ -7872,9 +8016,10 @@ $inventory = @(
             {
                 listStack.Children.Add(new TextBlock
                 {
-                    Text = "Haz clic en '➕ Crear Punto de Restauración Ahora' (en modo Administrador) para registrar un punto de control inmediato.",
+                    Text = "Haz clic en 'Crear Punto de Restauración Ahora' (en modo Administrador) para registrar un punto de control inmediato.",
                     Foreground = TextSecondary,
-                    FontSize = 12.3
+                    FontSize = 12.3,
+                    TextWrapping = TextWrapping.Wrap
                 });
             }
             else
@@ -7902,34 +8047,36 @@ $inventory = @(
             Border card = CreateCardContainer();
             card.Margin = new Thickness(0, 0, 0, 14);
             StackPanel stack = new StackPanel();
-            DockPanel head = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-            Button revertAll = CreateStyledButton(_changes.Count == 0 ? "Revertir todo" : "Revertir todo (" + _changes.Count + ")", false);
-            revertAll.IsEnabled = _changes.Count > 0;
-            revertAll.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", revertAll, RevertAllChangesAsync);
-            DockPanel.SetDock(revertAll, Dock.Right);
-            head.Children.Add(revertAll);
+            stack.Children.Add(new TextBlock { Text = "Cambios hechos por Blackwall (" + _changes.Count + ")", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, Margin = new Thickness(0, 0, 0, 6) });
+            stack.Children.Add(new TextBlock { Text = "Antes de cada cambio se guarda el valor que tenía Windows. «Revertir todo» los restaura sin depender del punto de restauración. Cada operación y su comprobación quedan en " + ChangeLogPath + ".", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+
+            WrapPanel actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
             // Covers what older versions applied without a journal too: the problem fixer's main button.
             Button resetAll = CreateStyledButton("Restablecer todo lo de Blackwall", true);
-            resetAll.Margin = new Thickness(0, 0, 8, 0);
+            resetAll.Margin = new Thickness(0, 0, 8, 8);
             resetAll.ToolTip = "Deshace todos los ajustes de Blackwall de este equipo, de cualquier versión, y vuelve a los valores de Windows";
             resetAll.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", resetAll, ResetEverythingAsync);
-            DockPanel.SetDock(resetAll, Dock.Right);
-            head.Children.Add(resetAll);
+            actions.Children.Add(resetAll);
+
+            Button revertAll = CreateStyledButton(_changes.Count == 0 ? "Revertir todo" : "Revertir todo (" + _changes.Count + ")", false);
+            revertAll.Margin = new Thickness(0, 0, 8, 8);
+            revertAll.IsEnabled = _changes.Count > 0;
+            revertAll.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", revertAll, RevertAllChangesAsync);
+            actions.Children.Add(revertAll);
+
             Button repairPowerButton = CreateStyledButton("Reparar plan de energía", false);
-            repairPowerButton.Margin = new Thickness(0, 0, 8, 0);
+            repairPowerButton.Margin = new Thickness(0, 0, 8, 8);
             repairPowerButton.ToolTip = "Crea una copia del plan Equilibrado con el procesador al 100 % y la activa; antes guarda copia de todos tus planes";
             repairPowerButton.Click += async (s, e) => await RunUiActionAsync("tweaks-batch", repairPowerButton, RepairPowerPlanAsync);
-            DockPanel.SetDock(repairPowerButton, Dock.Right);
-            head.Children.Add(repairPowerButton);
+            actions.Children.Add(repairPowerButton);
+
             Button exportState = CreateStyledButton("Exportar estado de los ajustes", false);
-            exportState.Margin = new Thickness(0, 0, 8, 0);
+            exportState.Margin = new Thickness(0, 0, 8, 8);
             exportState.ToolTip = "Guarda en el Escritorio un informe con cada ajuste y cada valor: ahora, de Blackwall y de Windows";
             exportState.Click += async (s, e) => await RunUiActionAsync("tweaks-report", exportState, ExportTweakStateAsync);
-            DockPanel.SetDock(exportState, Dock.Right);
-            head.Children.Add(exportState);
-            head.Children.Add(new TextBlock { Text = "Cambios hechos por Blackwall (" + _changes.Count + ")", Foreground = TextPrimary, FontWeight = FontWeights.Bold, FontSize = 14, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(head);
-            stack.Children.Add(new TextBlock { Text = "Antes de cada cambio se guarda el valor que tenía Windows. «Revertir todo» los restaura sin depender del punto de restauración. Cada operación y su comprobación quedan en " + ChangeLogPath + ".", Foreground = TextSecondary, FontSize = 12.3, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+            actions.Children.Add(exportState);
+
+            stack.Children.Add(actions);
             if (_changes.Count == 0) stack.Children.Add(new TextBlock { Text = "No hay cambios pendientes de revertir.", Foreground = TextSecondary, FontSize = 12.3 });
             foreach (var change in _changes.AsEnumerable().Reverse())
                 stack.Children.Add(new TextBlock { Text = GetStr(change, "at") + "  ·  " + GetStr(change, "title") + "  ·  " + ConvertToDictList(change["restoreOps"]).Count + " valores guardados", Foreground = TextPrimary, FontSize = 12.2, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 3) });
@@ -8401,7 +8548,8 @@ $inventory = @(
             processor.Add("Frecuencia base / actual", Unit(GetStr(cpu, "baseClockMhz"), "MHz") + " / " + Unit(GetStr(cpu, "currentClockMhz"), "MHz"));
             processor.Add("Caché L2 / L3", FormatCpuCacheMb(GetStr(cpu, "l2CacheKb")) + " / " + FormatCpuCacheMb(GetStr(cpu, "l3CacheKb")));
             processor.Add("Virtualización", GetBool(cpu, "virtualizationEnabled") ? "Activada" : "Desactivada");
-            processor.Add("Carga al escanear", Unit(GetStr(cpu, "loadPercent"), "%"));
+            int cpuLoadReport = cpu.ContainsKey("loadPercent") ? GetInt(cpu, "loadPercent") : -1;
+            processor.Add("Carga al escanear", cpuLoadReport >= 0 ? Unit(Convert.ToString(cpuLoadReport), "%") : "Sin informar");
             report.Sections.Add(processor);
 
             var memory = new ReportSection { Id = "memoria", Title = "Memoria", Summary = Unit(GetStr(mem, "totalGb"), "GB") + " " + GetStr(mem, "memoryType"), Meter = GetDouble(mem, "usagePercent"), MeterLabel = "En uso" };
@@ -8412,8 +8560,9 @@ $inventory = @(
             foreach (var s in ConvertToDictList(mem.ContainsKey("slots") ? mem["slots"] : null))
             {
                 bool used = GetBool(s, "occupied");
+                int mv = GetInt(s, "voltageMv");
                 slots.Rows.Add(new[] { GetStr(s, "slotName"), GetStr(s, "bankLabel"), used ? "Ocupada" : "Libre", used ? Unit(GetStr(s, "capacityGb"), "GB") : "—", used ? Unit(GetStr(s, "speedMhz"), "MHz") : "—",
-                    used ? GetStr(s, "manufacturer") : "—", used ? GetStr(s, "partNumber").Trim() : "—", used ? MaskSerial(GetStr(s, "serialNumber"), anonymize) : "—", used ? Unit(GetStr(s, "voltageMv"), "mV") : "—" });
+                    used ? GetStr(s, "manufacturer") : "—", used ? GetStr(s, "partNumber").Trim() : "—", used ? MaskSerial(GetStr(s, "serialNumber"), anonymize) : "—", used ? (mv > 0 ? mv + " mV" : "Sin informar") : "—" });
             }
             if (slots.Rows.Count > 0) memory.Tables.Add(slots);
             report.Sections.Add(memory);
@@ -8817,7 +8966,7 @@ $inventory = @(
                 if (format == "xlsx") File.WriteAllBytes(sfd.FileName, RenderHardwareReportXlsx(anonymize));
                 else File.WriteAllText(sfd.FileName, RenderHardwareReport(format, anonymize), new UTF8Encoding(format == "csv"));
                 CompleteOperation(activity, true, "Informe guardado en " + sfd.FileName + (anonymize ? " (datos identificativos ocultos)" : ""));
-                SetStatus("🟢 Informe exportado: " + Path.GetFileName(sfd.FileName), "Exportado");
+                SetStatus("● Informe exportado: " + Path.GetFileName(sfd.FileName), "Exportado");
             }
             catch (Exception ex) { CompleteOperation(activity, false, "No se pudo guardar el informe: " + ex.Message); }
         }
@@ -9230,7 +9379,7 @@ $inventory = @(
         {
             if (chassis == null) return "Equipo Windows";
             bool lap = GetBool(chassis, "isLaptop");
-            return (lap ? "💻 Laptop: " : "🖥️ Desktop: ") + GetStr(chassis, "manufacturer") + " " + GetStr(chassis, "model");
+            return (lap ? "Laptop: " : "Desktop: ") + GetStr(chassis, "manufacturer") + " " + GetStr(chassis, "model");
         }
 
         private Dictionary<string, object> GetDict(Dictionary<string, object> parent, string key)

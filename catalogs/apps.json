@@ -14,7 +14,7 @@
     {
       "id": "brave",
       "name": "Brave Browser",
-      "detectPattern": "Brave",
+      "detectPattern": "^Brave$",
       "publisher": "Brave Software",
       "category": "Navegadores",
       "description": "Navegador rápido basado en Chromium con bloqueador nativo de anuncios y rastreadores.",
@@ -23,14 +23,19 @@
       "installerExt": ".exe",
       "silentArgs": "--silent --install",
       "icon": "brave.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/brave.png",
-      "accentColor": "#FB542B",
-      "tags": ["navegador", "brave", "chromium", "adblock", "privacidad"]
+      "tags": [
+        "navegador",
+        "brave",
+        "chromium",
+        "adblock",
+        "privacidad"
+      ],
+      "signer": "Brave Software, Inc."
     },
     {
       "id": "firefox",
       "name": "Mozilla Firefox",
-      "detectPattern": "Mozilla Firefox",
+      "detectPattern": "^Mozilla Firefox",
       "publisher": "Mozilla",
       "category": "Navegadores",
       "description": "Navegador independiente de código abierto enfocado en privacidad y personalización.",
@@ -39,14 +44,18 @@
       "installerExt": ".exe",
       "silentArgs": "/S",
       "icon": "firefox.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/firefox.png",
-      "accentColor": "#FF7139",
-      "tags": ["navegador", "firefox", "mozilla", "web"]
+      "tags": [
+        "navegador",
+        "firefox",
+        "mozilla",
+        "web"
+      ],
+      "signer": "Mozilla Corporation"
     },
     {
       "id": "chrome",
       "name": "Google Chrome",
-      "detectPattern": "Google Chrome",
+      "detectPattern": "^Google Chrome$",
       "publisher": "Google",
       "category": "Navegadores",
       "description": "El navegador web de Google con sincronización multiplataforma y máxima compatibilidad.",
@@ -55,14 +64,17 @@
       "installerExt": ".msi",
       "silentArgs": "/qn /norestart",
       "icon": "chrome.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/google-chrome.png",
-      "accentColor": "#4285F4",
-      "tags": ["navegador", "chrome", "google"]
+      "tags": [
+        "navegador",
+        "chrome",
+        "google"
+      ],
+      "signer": "Google LLC"
     },
     {
       "id": "vcredist_2015_2022_x64",
       "name": "Visual C++ Redistributable 2015-2022 (x64)",
-      "detectPattern": "Microsoft Visual C\\+\\+ 2015-2022 Redistributable",
+      "detectPattern": "^Microsoft Visual C\\+\\+ (2015-20[0-9]{2}|v14) Redistributable \\(x64\\)",
       "publisher": "Microsoft",
       "category": "Runtimes y Dependencias",
       "description": "Librerías de ejecución C++ indispensables para juegos y aplicaciones modernas en Windows.",
@@ -71,14 +83,20 @@
       "installerExt": ".exe",
       "silentArgs": "/install /quiet /norestart",
       "icon": "vcredist.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/cpp.png",
-      "accentColor": "#68217A",
-      "tags": ["runtime", "vc++", "visual c++", "dll", "msvcp140", "vcruntime140"]
+      "tags": [
+        "runtime",
+        "vc++",
+        "visual c++",
+        "dll",
+        "msvcp140",
+        "vcruntime140"
+      ],
+      "signer": "Microsoft Corporation"
     },
     {
       "id": "dotnet_desktop_8",
       "name": ".NET Desktop Runtime 8 (LTS)",
-      "detectPattern": "Windows Desktop Runtime - 8\\.",
+      "detectPattern": "^Microsoft Windows Desktop Runtime - 8\\.",
       "publisher": "Microsoft",
       "category": "Runtimes y Dependencias",
       "description": "Entorno de ejecución necesario para ejecutar aplicaciones modernas de escritorio en .NET 8.",
@@ -87,14 +105,17 @@
       "installerExt": ".exe",
       "silentArgs": "/install /quiet /norestart",
       "icon": "dotnet.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/dotnet.png",
-      "accentColor": "#512BD4",
-      "tags": ["runtime", "dotnet", ".net 8", "microsoft"]
+      "tags": [
+        "runtime",
+        "dotnet",
+        ".net 8",
+        "microsoft"
+      ],
+      "signer": ".NET"
     },
     {
       "id": "directx_enduser",
       "name": "DirectX End-User Runtime (Web Installer)",
-      "detectPattern": "DirectX",
       "publisher": "Microsoft",
       "category": "Runtimes y Dependencias",
       "description": "Librerías clásicas D3DX9, D3DX10, D3DX11 y XInput requeridas por cientos de videojuegos.",
@@ -103,89 +124,114 @@
       "installerExt": ".exe",
       "silentArgs": "/Q",
       "icon": "directx.png",
-      "iconUrl": "https://raw.githubusercontent.com/microsoft/DirectX-Graphics-Samples/master/Assets/DirectX12Ultimate.png",
-      "accentColor": "#00A4EF",
-      "tags": ["directx", "d3dx9", "xinput", "runtime", "juegos"]
+      "tags": [
+        "directx",
+        "d3dx9",
+        "xinput",
+        "runtime",
+        "juegos"
+      ],
+      "detectFile": "%SystemRoot%\\System32\\d3dx9_43.dll",
+      "signer": "Microsoft Corporation"
     },
     {
       "id": "7zip",
       "name": "7-Zip (64-bit)",
-      "detectPattern": "7-Zip",
+      "detectPattern": "^7-Zip ",
       "publisher": "Igor Pavlov",
       "category": "Compresores y Utilidades",
       "description": "Compresor y descompresor de archivos ultrarrápido y ligero (.7z, .zip, .rar, .tar, .iso).",
       "wingetId": "7zip.7zip",
-      "fallbackUrl": "https://www.7-zip.org/a/7z2408-x64.exe",
-      "installerExt": ".exe",
-      "silentArgs": "/S",
       "icon": "7zip.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/7zip.png",
-      "accentColor": "#000000",
-      "tags": ["7zip", "rar", "zip", "compresor", "descomprimir"]
+      "tags": [
+        "7zip",
+        "rar",
+        "zip",
+        "compresor",
+        "descomprimir"
+      ]
     },
     {
       "id": "winrar",
       "name": "WinRAR (64-bit)",
-      "detectPattern": "WinRAR",
+      "detectPattern": "^WinRAR ",
       "publisher": "win.rar GmbH",
       "category": "Compresores y Utilidades",
       "description": "Compresor clásico para archivos .RAR y .ZIP con integración en el menú contextual.",
       "wingetId": "RARLab.WinRAR",
-      "fallbackUrl": "https://www.rarlab.com/rar/winrar-x64-701es.exe",
+      "fallbackUrl": "https://www.rarlab.com/rar/winrar-x64-723es.exe",
       "installerExt": ".exe",
       "silentArgs": "/S",
       "icon": "winrar.png",
-      "iconUrl": "https://raw.githubusercontent.com/EgorchikF/WinRAR-icons-for-7-Zip/main/7-Zip%20-%20WinRAR%20Default%20style%20icons%20png/1.png",
-      "accentColor": "#1B5E20",
-      "tags": ["winrar", "rar", "zip", "compresor"]
+      "tags": [
+        "winrar",
+        "rar",
+        "zip",
+        "compresor"
+      ],
+      "signer": "win.rar GmbH"
     },
     {
       "id": "everything",
       "name": "Everything (Voidtools)",
-      "detectPattern": "Everything",
+      "detectPattern": "^Everything [0-9]",
       "publisher": "voidtools",
       "category": "Compresores y Utilidades",
       "description": "Buscador instantáneo de archivos y carpetas en Windows mediante lectura directa de la tabla MFT NTFS.",
       "wingetId": "voidtools.Everything",
-      "fallbackUrl": "https://www.voidtools.com/Everything-1.4.1.1026.x64-Setup.exe",
-      "installerExt": ".exe",
-      "silentArgs": "/S",
+      "fallbackUrl": "https://www.voidtools.com/Everything-1.4.1.1032.x64.msi",
+      "installerExt": ".msi",
+      "silentArgs": "/qn /norestart",
       "icon": "everything.png",
-      "iconUrl": "https://raw.githubusercontent.com/lin-ycv/EverythingPowerToys/main/Images/Everything.light.png",
-      "accentColor": "#FF9800",
-      "tags": ["everything", "buscador", "archivos", "ntfs", "utilidad"]
+      "tags": [
+        "everything",
+        "buscador",
+        "archivos",
+        "ntfs",
+        "utilidad"
+      ],
+      "signer": "voidtools PTY LTD"
     },
     {
       "id": "powertoys",
       "name": "Microsoft PowerToys",
-      "detectPattern": "PowerToys",
+      "detectPattern": "^PowerToys",
       "publisher": "Microsoft",
       "category": "Compresores y Utilidades",
       "description": "Conjunto de utilidades avanzadas para usuarios expertos en Windows (FancyZones, Awake, ColorPicker).",
       "wingetId": "Microsoft.PowerToys",
-      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.86.0/PowerToysUserSetup-0.86.0-x64.exe",
+      "fallbackUrl": "https://github.com/microsoft/PowerToys/releases/download/v0.102.3101/PowerToysSetup-0.102.3101.0-x64.exe",
       "installerExt": ".exe",
       "silentArgs": "--silent",
       "icon": "powertoys.png",
-      "iconUrl": "https://raw.githubusercontent.com/microsoft/PowerToys/main/src/settings-ui/Settings.UI/Assets/Settings/Square150x150Logo.scale-200.png",
-      "accentColor": "#0078D4",
-      "tags": ["powertoys", "fancyzones", "productividad", "utilidad"]
+      "tags": [
+        "powertoys",
+        "fancyzones",
+        "productividad",
+        "utilidad"
+      ],
+      "signer": "Microsoft Corporation"
     },
     {
       "id": "vscode",
       "name": "Visual Studio Code",
-      "detectPattern": "Microsoft Visual Studio Code",
+      "detectPattern": "^Microsoft Visual Studio Code",
       "publisher": "Microsoft",
       "category": "Desarrollo",
       "description": "Editor de código ligero y potente con soporte de extensiones, Git y terminal integrada.",
       "wingetId": "Microsoft.VisualStudioCode",
-      "fallbackUrl": "https://update.code.visualstudio.com/latest/win32-x64-user/stable",
+      "fallbackUrl": "https://update.code.visualstudio.com/latest/win32-x64/stable",
       "installerExt": ".exe",
       "silentArgs": "/VERYSILENT /NORESTART /MERGETASKS=!runcode,addcontextmenufiles,addcontextmenufolders,addtopath",
       "icon": "vscode.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/visual-studio-code.png",
-      "accentColor": "#007ACC",
-      "tags": ["vscode", "código", "ide", "programación", "desarrollo"]
+      "tags": [
+        "vscode",
+        "código",
+        "ide",
+        "programación",
+        "desarrollo"
+      ],
+      "signer": "Microsoft Corporation"
     },
     {
       "id": "git",
@@ -195,50 +241,60 @@
       "category": "Desarrollo",
       "description": "Sistema de control de versiones distribuido junto con Git Bash.",
       "wingetId": "Git.Git",
-      "fallbackUrl": "https://github.com/git-for-windows/git/releases/download/v2.47.0.windows.2/Git-2.47.0.2-64-bit.exe",
+      "fallbackUrl": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/Git-2.56.0.4-64-bit.exe",
       "installerExt": ".exe",
       "silentArgs": "/VERYSILENT /NORESTART",
       "icon": "git.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/git.png",
-      "accentColor": "#F05032",
-      "tags": ["git", "github", "control de versiones", "bash", "desarrollo"]
+      "tags": [
+        "git",
+        "github",
+        "control de versiones",
+        "bash",
+        "desarrollo"
+      ],
+      "signer": "Johannes Schindelin"
     },
     {
       "id": "nodejs_lts",
       "name": "Node.js LTS",
-      "detectPattern": "Node\\.js",
+      "detectPattern": "^Node\\.js$",
       "publisher": "OpenJS Foundation",
       "category": "Desarrollo",
       "description": "Entorno de ejecución JavaScript multiplataforma basado en V8.",
       "wingetId": "OpenJS.NodeJS.LTS",
-      "fallbackUrl": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-x64.msi",
+      "fallbackUrl": "https://nodejs.org/dist/v26.13.0/node-v26.13.0-x64.msi",
       "installerExt": ".msi",
       "silentArgs": "/qn /norestart",
       "icon": "nodejs.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/nodejs.png",
-      "accentColor": "#539E43",
-      "tags": ["node", "npm", "javascript", "desarrollo"]
+      "tags": [
+        "node",
+        "npm",
+        "javascript",
+        "desarrollo"
+      ],
+      "signer": "OpenJS Foundation"
     },
     {
       "id": "rustup",
       "name": "Rust Toolchain (rustup)",
-      "detectPattern": "Rustup|Rust",
+      "detectPattern": "^Rustup\\b",
       "publisher": "Rust Foundation",
       "category": "Desarrollo",
       "description": "Instalador oficial del lenguaje de programación Rust (rustc y cargo).",
       "wingetId": "Rustlang.Rustup",
-      "fallbackUrl": "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe",
-      "installerExt": ".exe",
-      "silentArgs": "-y",
       "icon": "rust.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/rust.png",
-      "accentColor": "#CE412B",
-      "tags": ["rust", "cargo", "rustc", "compilador", "desarrollo"]
+      "tags": [
+        "rust",
+        "cargo",
+        "rustc",
+        "compilador",
+        "desarrollo"
+      ]
     },
     {
       "id": "discord",
       "name": "Discord",
-      "detectPattern": "Discord",
+      "detectPattern": "^Discord$",
       "publisher": "Discord Inc.",
       "category": "Comunicación",
       "description": "Plataforma de voz, vídeo y chat para comunidades y gaming.",
@@ -247,14 +303,20 @@
       "installerExt": ".exe",
       "silentArgs": "-s",
       "icon": "discord.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/discord.png",
-      "accentColor": "#5865F2",
-      "tags": ["discord", "chat", "voz", "gaming", "comunicación"]
+      "tags": [
+        "discord",
+        "chat",
+        "voz",
+        "gaming",
+        "comunicación"
+      ],
+      "signer": "Discord Inc.",
+      "perUser": true
     },
     {
       "id": "steam",
       "name": "Steam",
-      "detectPattern": "Steam",
+      "detectPattern": "^Steam$",
       "publisher": "Valve",
       "category": "Gaming",
       "description": "Plataforma líder de distribución digital de videojuegos para PC.",
@@ -263,41 +325,57 @@
       "installerExt": ".exe",
       "silentArgs": "/S",
       "icon": "steam.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/steam.png",
-      "accentColor": "#171A21",
-      "tags": ["steam", "valve", "juegos", "gaming"]
+      "tags": [
+        "steam",
+        "valve",
+        "juegos",
+        "gaming"
+      ],
+      "signer": "Valve Corp."
     },
     {
       "id": "vlc",
       "name": "VLC Media Player",
-      "detectPattern": "VLC media player",
+      "detectPattern": "^VLC media player",
       "publisher": "VideoLAN",
       "category": "Multimedia",
       "description": "Reproductor multimedia universal capaz de reproducir cualquier formato de audio y vídeo sin códecs externos.",
       "wingetId": "VideoLAN.VLC",
-      "fallbackUrl": "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe",
-      "installerExt": ".exe",
-      "silentArgs": "/S",
+      "fallbackUrl": "https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.msi",
+      "installerExt": ".msi",
+      "silentArgs": "/qn /norestart",
       "icon": "vlc.png",
-      "iconUrl": "https://raw.githubusercontent.com/videolan/vlc/master/share/icons/256x256/vlc.png",
-      "accentColor": "#FF8800",
-      "tags": ["vlc", "video", "reproductor", "multimedia", "mkv", "mp4"]
+      "tags": [
+        "vlc",
+        "video",
+        "reproductor",
+        "multimedia",
+        "mkv",
+        "mp4"
+      ],
+      "signer": "VideoLAN"
     },
     {
       "id": "libreoffice",
       "name": "LibreOffice",
-      "detectPattern": "LibreOffice",
+      "detectPattern": "^LibreOffice [0-9]",
       "publisher": "The Document Foundation",
       "category": "Ofimática",
       "description": "Suite ofimática completa y gratuita compatible con documentos Word, Excel y PowerPoint.",
       "wingetId": "TheDocumentFoundation.LibreOffice",
-      "fallbackUrl": "https://download.documentfoundation.org/libreoffice/stable/24.8.2/win/x86_64/LibreOffice_24.8.2_Win_x86-64.msi",
+      "fallbackUrl": "https://download.documentfoundation.org/libreoffice/stable/26.8.2/win/x86_64/LibreOffice_26.8.2_Win_x86-64.msi",
       "installerExt": ".msi",
       "silentArgs": "/qn /norestart",
       "icon": "libreoffice.png",
-      "iconUrl": "https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/libreoffice.png",
-      "accentColor": "#18A303",
-      "tags": ["office", "word", "excel", "documentos", "ofimática", "libreoffice"]
+      "tags": [
+        "office",
+        "word",
+        "excel",
+        "documentos",
+        "ofimática",
+        "libreoffice"
+      ],
+      "signer": "The Document Foundation"
     }
   ]
 }

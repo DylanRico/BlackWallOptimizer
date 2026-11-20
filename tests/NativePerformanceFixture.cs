@@ -17,7 +17,6 @@ internal static class NativePerformanceFixture
         foreach (Dictionary<string, object> entry in (IEnumerable)type.GetField("_apps", flags).GetValue(window))
         {
             var copy = new Dictionary<string, object>(entry);
-            copy["iconUrl"] = "";
             apps.Add(copy);
         }
         type.GetField("_apps", flags).SetValue(window, apps);
